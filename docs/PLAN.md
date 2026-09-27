@@ -113,11 +113,10 @@ license. Presidio ships `GLiNERRecognizer` (installed via `presidio-analyzer[gli
 so the integration needs no custom recognizer code. Revision and SHA-256 go in
 `models.lock.json`.
 
-**Open decision for Phase 2:** the `gliner` package hard-depends on `torch`. Either
-(a) pin the CPU-only torch wheel after checking its bundled-library licenses (Intel MKL
-is not MIT, Apache or BSD), or (b) run the ONNX weights directly on `onnxruntime` with
-`tokenizers` and drop torch entirely. Option (b) is preferred if span decoding stays
-under about 80 lines.
+**Decided in Phase 2:** the `gliner` package (and its `torch` dependency, whose bundled
+MKL license was unverified) is not used. `detect/ner.py` runs the full-precision ONNX
+export directly on `onnxruntime` with `tokenizers` in about 60 lines. The quantised export
+was rejected: it scored 4 of 15 synthetic addresses below the default threshold.
 
 ## 4. File layout
 
@@ -125,7 +124,7 @@ under about 80 lines.
 Redactit/
 ├─ pyproject.toml            # deps, entry point `redactit`
 ├─ uv.lock
-├─ models.lock.json          # model name, URL, revision, SHA-256
+├─ src/redactit/models.lock.json  # model URL (pinned revision) and SHA-256
 ├─ src/redactit/policy.default.yaml  # annotated default policy, the base layer
 ├─ src/redactit/
 │  ├─ cli.py                 # redact, verify, clip, watch, setup-models
@@ -197,8 +196,11 @@ are committed.
   or `/etc/redactit/policy.yaml`) is merged with the user policy. The merge is
   **tighten-only**: a user can raise the dial, add terms, or enable types, but cannot go
   below the admin floor or unlock locked types.
-- **Dial 1 to 5.** Maps to a per-entity-type score threshold. The default is 3.
-  Contact details get lower thresholds than general names at every position.
+- **Dial 1 to 5.** Maps to a per-entity-type score threshold. The default is 3, and so
+  is the default admin floor: it is the lowest dial the leak test proves, so a user
+  cannot go below it unless an admin lowers the floor. Contact details sit 0.05 lower;
+  names and addresses from the model sit 0.15 lower, because its probabilities run lower
+  than pattern scores for the same certainty.
 - **Locked types** (cards, IBAN, API keys, SIN, SSN, NINO, passport numbers) are
   validator-driven and apply at every dial position.
 - **Review mode** `always` or `low_confidence_only`. A review that times out blocks the
@@ -274,7 +276,7 @@ linked into Redactit.
    values recorded in a manifest. It includes hard cases: values split across lines, cards
    with spaces or dashes, PII in DOCX headers, comments and deleted revisions, text inside
    images embedded in PDFs, low-contrast and rotated text, and QR codes that encode PII.
-2. Redact the corpus with the default policy, and again at the admin floor.
+2. Redact the corpus at the admin floor and at the tightest dial.
 3. Verify each output **independently of the redactor**. Correlated errors would hide
    leaks, so the verifier uses higher-resolution rendering and its own OCR settings. It
    also compares normalised forms (digits only for numbers, case-folded names, edit
