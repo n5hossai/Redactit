@@ -2,13 +2,12 @@
 
 WHY these checks and no others: the leak harness trusts the generator's
 determinism and its manifest contract; OCR-based readability is checked
-separately (see the generator's own report), not here, to keep this
+by the leak test's pass-through run, not here, to keep this
 suite fast and offline.
 """
 from __future__ import annotations
 
 import re
-import sys
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
@@ -16,8 +15,7 @@ from pathlib import Path
 import pypdfium2 as pdfium
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "corpus"))
-import generate as gen  # noqa: E402
+import generate as gen
 
 SEED = 42
 PER_VARIANT = 1
