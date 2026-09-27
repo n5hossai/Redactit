@@ -7,13 +7,17 @@ import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
 
+from redactit.policy import MODEL_FLOOR as FLOOR  # lowest threshold any dial uses
 from redactit.types import Span
 
 # Model-card label -> our entity type. The model scores each label separately.
 LABELS = {"name": "PERSON", "location address": "ADDRESS", "location street": "ADDRESS"}
 MAX_WIDTH = 12  # gliner_config.json max_width: the longest span, in words, the model scores
-WINDOW, STRIDE = 200, 150  # words per model call; the overlap keeps boundary entities whole
-FLOOR = 0.30  # lowest threshold any dial position uses; the policy decides the rest
+# Windows are cut by sub-word tokens, not words. A 12 KB base64 blob once made one
+# 8,745-token window that ran for 15+ minutes at 5 GB, and a name's score fell from 0.98
+# to 0.51 as its window grew to 4,000 tokens; short windows keep both in bounds.
+WINDOW_TOKENS, OVERLAP_TOKENS = 320, 64
+LONG_WORD_TOKENS = 40  # one "word" this long (base64, a URL) cannot be a name; skip it
 WORD = re.compile(r"\w+(?:[-_]\w+)*|\S")  # GLiNER's own word splitter
 PROMPT = [t for label in LABELS for t in ("<<ENT>>", label)] + ["<<SEP>>"]
 
@@ -27,12 +31,12 @@ class GlinerNer:
 
     def detect(self, text: str) -> list[Span]:
         words = [(m.start(), m.end()) for m in WORD.finditer(text)]
-        spans = []
-        for start in range(0, len(words), STRIDE):
-            spans += self._predict(text, words[start:start + WINDOW])
-            if start + WINDOW >= len(words):
-                break
-        return _greedy(spans)
+        if not words:
+            return []
+        lens = [len(e.ids) for e in self.tok.encode_batch([text[s:e] for s, e in words], add_special_tokens=False)]
+        budget = WINDOW_TOKENS - len(self.tok.encode(PROMPT, is_pretokenized=True).ids)
+        spans = [s for a, b in _windows(lens, budget) for s in self._predict(text, words[a:b])]
+        return [s for t in set(self.types) for s in _greedy([x for x in spans if x.entity_type == t])]
 
     def _predict(self, text: str, words: list[tuple[int, int]]) -> list[Span]:
         enc = self.tok.encode(PROMPT + [text[s:e] for s, e in words], is_pretokenized=True)
@@ -61,8 +65,34 @@ class GlinerNer:
         ]
 
 
+def _windows(lens: list[int], budget: int) -> list[tuple[int, int]]:
+    """Word ranges of at most `budget` tokens, overlapping by about OVERLAP_TOKENS, that
+    skip over-long words so each window stays small."""
+    out, start = [], 0
+    while start < len(lens):
+        if lens[start] > LONG_WORD_TOKENS:
+            start += 1
+            continue
+        end, used = start, 0
+        while end < len(lens) and lens[end] <= LONG_WORD_TOKENS and used + lens[end] <= budget:
+            used += lens[end]
+            end += 1
+        out.append((start, end))
+        if end >= len(lens) or lens[end] > LONG_WORD_TOKENS:
+            start = end
+            continue
+        back = end  # step back so an entity cut at the edge is seen whole next time
+        while back > start + 1 and sum(lens[back - 1:end]) <= OVERLAP_TOKENS:
+            back -= 1
+        start = back
+    return out
+
+
 def _greedy(spans: list[Span]) -> list[Span]:
-    """Highest score first, dropping anything that overlaps a kept span (GLiNER's flat NER)."""
+    """Highest score first, dropping anything that overlaps a kept span (GLiNER's flat NER).
+
+    Run per entity type, so a name below its own threshold cannot suppress an address.
+    """
     kept: list[Span] = []
     for s in sorted(spans, key=lambda s: -s.score):
         if all(s.end <= k.start or s.start >= k.end for k in kept):

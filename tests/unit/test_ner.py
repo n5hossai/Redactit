@@ -34,3 +34,25 @@ def test_long_text_is_windowed_without_losing_entities(ner):
 
 def test_runs_without_torch():
     assert "torch" not in sys.modules
+
+
+def test_a_long_base64_blob_is_fast_and_bounded(ner):
+    import base64
+    import os
+    import time
+
+    blob = base64.b64encode(os.urandom(9000)).decode()  # ~12 KB, the case that once hung
+    start = time.perf_counter()
+    found = ner.detect(f"Attachment: {blob}\nSigned by Priya Okafor.")
+    assert time.perf_counter() - start < 30
+    assert any(s.entity_type == "PERSON" for s in found)
+
+
+def test_windows_respect_the_token_budget():
+    from redactit.detect.ner import LONG_WORD_TOKENS, _windows
+
+    lens = [3] * 500 + [LONG_WORD_TOKENS + 1] + [2] * 50
+    for a, b in _windows(lens, budget=100):
+        assert sum(lens[a:b]) <= 100 and all(n <= LONG_WORD_TOKENS for n in lens[a:b])
+    covered = {i for a, b in _windows(lens, 100) for i in range(a, b)}
+    assert covered == set(range(len(lens))) - {500}
