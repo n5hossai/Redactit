@@ -18,6 +18,11 @@ ACTIONS = {"pseudonymize", "mask", "strike", "omit", "box"}
 DIAL = {1: 0.90, 2: 0.80, 3: 0.65, 4: 0.50, 5: 0.35}
 CONTACT_TYPES = {"EMAIL", "PHONE", "ADDRESS"}
 CONTACT_DELTA = 0.05
+# PERSON and ADDRESS come from the GLiNER model, whose probabilities run lower than pattern
+# scores for the same certainty (its model card works at 0.3-0.5). On the synthetic corpus
+# true names scored 0.65-0.99 and false positives stayed rare down to 0.35, so model types
+# get their own offset, never below the 0.30 the model reports from.
+MODEL_TYPES, MODEL_DELTA, MODEL_FLOOR = {"PERSON", "ADDRESS"}, 0.15, 0.30
 _MODE_RANK = {"low_confidence_only": 0, "always": 1}
 
 
@@ -93,6 +98,8 @@ class Policy(_Strict):
         base = DIAL[dial]
         if entity_type in CONTACT_TYPES:
             base -= CONTACT_DELTA
+        if entity_type in MODEL_TYPES:
+            base = max(MODEL_FLOOR, base - MODEL_DELTA)
         return round(base, 2)
 
     def decide(self, text: str, spans: list[Span], site: str | None = None) -> list[Decision]:

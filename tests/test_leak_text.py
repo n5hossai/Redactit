@@ -17,10 +17,11 @@ except models.ModelError:
 from redact_corpus import SUPPORTED, redact_corpus  # noqa: E402
 
 
-@pytest.fixture(scope="module")
-def corpus(tmp_path_factory):
+# Seed 1234 holds "Ms Carolyn Jones", a name the model once scored just under threshold.
+@pytest.fixture(scope="module", params=[7, 1234], ids=["seed 7", "seed 1234"])
+def corpus(request, tmp_path_factory):
     root = tmp_path_factory.mktemp("corpus")
-    gen.generate(seed=7, out=root, per_variant=3)
+    gen.generate(seed=request.param, out=root, per_variant=3)
     return root
 
 

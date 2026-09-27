@@ -113,7 +113,7 @@ def test_decide_drops_disabled_type():
 
 def test_decide_drops_below_threshold():
     policy = _policy(PERSON={"action": "pseudonymize"})
-    span = Span(0, 5, "PERSON", 0.10, "gliner")  # dial 3 threshold 0.65
+    span = Span(0, 5, "PERSON", 0.10, "gliner")  # dial 3 threshold for model types: 0.50
     assert policy.decide("Priya", [span]) == []
 
 
@@ -144,7 +144,7 @@ def test_reason_never_contains_matched_text():
     policy = _policy(PERSON={"action": "pseudonymize"})
     span = Span(0, 12, "PERSON", 0.87, "gliner")
     decisions = policy.decide("Priya Okafor", [span])
-    assert decisions[0].reason == "gliner score=0.87 dial=3 threshold=0.65"
+    assert decisions[0].reason == "gliner score=0.87 dial=3 threshold=0.50"
     assert "Priya" not in decisions[0].reason
     assert decisions[0].rule_id == "entities.PERSON"
 
@@ -176,7 +176,7 @@ def test_needs_review_always_mode():
 
 def test_needs_review_low_confidence_only():
     policy = _policy(PERSON={"action": "pseudonymize"})
-    close_to_threshold = Span(0, 12, "PERSON", 0.66, "gliner")  # < 0.65 + 0.15
+    close_to_threshold = Span(0, 12, "PERSON", 0.60, "gliner")  # < 0.50 + 0.15
     confident = Span(0, 12, "PERSON", 0.95, "gliner")
     assert policy.decide("Priya Okafor", [close_to_threshold])[0].needs_review is True
     assert policy.decide("Priya Okafor", [confident])[0].needs_review is False
