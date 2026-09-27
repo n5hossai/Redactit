@@ -1,0 +1,44 @@
+# Redactit policy. An admin-managed copy is merged with this file, and the merge can only
+# make redaction stricter (docs/PLAN.md §6).
+version: 1
+
+dial:
+  position: 3        # 1 (loosest) to 5 (tightest)
+  admin_floor: 2     # users cannot turn the dial below this
+
+review:
+  mode: low_confidence_only   # or: always
+  timeout_action: block       # an unreviewed item is never sent unredacted
+
+# Actions:
+#   pseudonymize  "Priya Okafor" -> "[PERSON_1]", consistent within one chat
+#   mask          every letter and digit -> "*", separators kept: "***-**-****"
+#   strike        the whole value -> "█" of the same length
+#   omit          the value is removed
+#   box           PDF and images: filled box (labelled when the entity is pseudonymized)
+# locked: true    applies at every dial position, and a user policy cannot unlock it
+entities:
+  PERSON:        {action: pseudonymize}
+  ADDRESS:       {action: pseudonymize}
+  EMAIL:         {action: pseudonymize}
+  PHONE:         {action: mask}
+  DATE_OF_BIRTH: {action: mask}
+  COMPANY_TERM:  {action: pseudonymize}
+  CREDIT_CARD:   {action: mask, locked: true}
+  IBAN:          {action: mask, locked: true}
+  CA_SIN:        {action: mask, locked: true}
+  US_SSN:        {action: mask, locked: true}
+  UK_NINO:       {action: mask, locked: true}
+  PASSPORT:      {action: mask, locked: true}
+  API_KEY:       {action: strike, locked: true}
+
+custom_terms:
+  files: []          # one term per line: client names, project codenames
+  terms: []
+allowlist: []        # never redacted, e.g. your own company name
+
+vault:
+  retention_days: 30
+
+sites:
+  chatgpt.com: {dial: 4}   # per-site dial; can raise, never lower, the effective dial
