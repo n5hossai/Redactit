@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+
+# Generated test data and reports: regenerate from the seeded generators
+tests/corpus/out/
+tests/leak/out/
+
+# Downloaded models are fetched by `redactit setup-models` and pinned by hash
+models/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
