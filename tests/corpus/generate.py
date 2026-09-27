@@ -149,7 +149,8 @@ class ValueFactory:
         return f"GB{iban_check_digits('GB', bban)}{bban}"
 
     def ca_sin(self) -> str:
-        body = str(self.rng.randint(1, 9)) + "".join(str(self.rng.randint(0, 9)) for _ in range(7))
+        # Real SINs never start with 0 or 8, so neither may synthetic ones.
+        body = self.rng.choice("1234567" "9") + "".join(str(self.rng.randint(0, 9)) for _ in range(7))
         return body + luhn_check_digit(body)
 
     def us_ssn(self) -> str:
