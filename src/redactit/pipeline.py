@@ -1,9 +1,10 @@
 """One engine behind every interface: detect -> decide -> apply -> audit."""
 
+import unicodedata
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from redactit import models
+from redactit import __version__, models, safety
 from redactit.audit import AuditLog
 from redactit.detect.ner import GlinerNer
 from redactit.detect.registry import Detector
@@ -16,21 +17,33 @@ from redactit.vault import Vault
 @dataclass(frozen=True)
 class Result:
     text: str
-    decisions: list[Decision]
+    decisions: list[Decision]  # offsets index into the original input text
 
 
 class Engine:
     """Loads the analyzer and model once (seconds), then redacts many texts (milliseconds)."""
 
     def __init__(self, policy: Policy, vault: Vault, audit: AuditLog | None = None):
+        safety.block_network()  # here, not only in the CLI, so every interface runs behind it
         self.policy, self.vault, self.audit = policy, vault, audit
         self.detector = Detector(company_terms=policy.company_terms())
         self.ner = GlinerNer(models.path_for("gliner/model.onnx"), models.path_for("gliner/tokenizer.json"))
+        purged = vault.purge(policy.vault.retention_days)
+        if audit:
+            audit.write("engine_start", version=__version__)
+            audit.write("policy_loaded", dial=policy.effective_dial(), admin_floor=policy.dial.admin_floor,
+                        entity_count=len(policy.entities), locked_count=sum(e.locked for e in policy.entities.values()))
+            for name, pin in models.LOCK.items():  # path_for above already verified each hash
+                audit.write("model_verified", model=name.replace("/", ".").lower(),
+                            revision=pin["url"].split("/resolve/")[1].split("/")[0], sha256=pin["sha256"])
+            audit.write("vault_purge", purged_count=purged, retention_days=policy.vault.retention_days)
 
     def redact(self, text: str, scope: str, *, file_type: str = "txt", destination: str = "cli",
                site: str | None = None) -> Result:
         """`scope` keeps pseudonyms consistent: one chat, one folder run, one CLI call."""
-        decisions = self.policy.decide(text, self.detector.detect(text) + self.ner.detect(text), site)
+        clean, where = _canonical(text)
+        spans = self.detector.detect(clean) + self.ner.detect(clean)
+        decisions = [_to_source(d, where) for d in self.policy.decide(clean, spans, site)]
         result = Result(apply(text, decisions, Pseudonymizer(self.vault, scope)), decisions)
         if self.audit:
             self.audit.write(
@@ -42,6 +55,27 @@ class Engine:
                 decisions=[_audit_entry(d) for d in decisions],
             )
         return result
+
+
+def _canonical(text: str) -> tuple[str, list[int]]:
+    """Text for the detectors: each character NFKC-folded, invisible format characters
+    (soft hyphens, zero-width spaces) dropped, plus each output character's source index.
+
+    "Pri­ya" or a card number with zero-width spaces inside would otherwise hide from
+    every pattern; the redaction still lands on the original text, hidden characters and all.
+    """
+    out, where = [], []
+    for i, ch in enumerate(text):
+        if unicodedata.category(ch) == "Cf":
+            continue
+        for c in unicodedata.normalize("NFKC", ch):
+            out.append(c)
+            where.append(i)
+    return "".join(out), where
+
+
+def _to_source(d: Decision, where: list[int]) -> Decision:
+    return replace(d, span=replace(d.span, start=where[d.span.start], end=where[d.span.end - 1] + 1))
 
 
 def _audit_entry(d: Decision) -> dict:

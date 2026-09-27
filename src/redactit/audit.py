@@ -10,11 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-ACTIONS = {"pseudonymize", "mask", "strike", "omit", "box"}
+from redactit.policy import ACTIONS
+
 _REASON_CODES = {"host_down", "timeout", "review_timeout", "policy_block"}
 _ENTITY_TYPE_RE = re.compile(r"^[A-Z_]{2,32}$")
-# Lower-case ids, or "entities.<ENTITY_TYPE>" as the policy names its rules. Mixed case is
-# refused so a name like "Okafor" can never pass as an identifier.
+# Lower-case ids (detector names are lower-cased by the pipeline), or "entities.<TYPE>" as
+# the policy names its rules. Mixed case is refused, so "Okafor" never passes as an id.
 _RULE_ID_RE = re.compile(r"^([a-z0-9_.]{1,64}|entities\.[A-Z_]{2,32})$")
 _FILE_TYPE_RE = re.compile(r"^[a-z0-9]{1,8}$")
 _HOSTNAME_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$")
@@ -93,6 +94,8 @@ def _is_decisions(v: Any) -> bool:
 
 
 # Fixed field allowlist per event. Anything not named here, for any event, is rejected.
+# review_decision and upload_blocked are written by the extension host (Phases 4-5); their
+# shapes are fixed now so no later event can carry free text.
 _EVENT_FIELDS: dict[str, dict[str, Callable[[Any], bool]]] = {
     "engine_start": {"version": _is_rule_id},
     "policy_loaded": {
