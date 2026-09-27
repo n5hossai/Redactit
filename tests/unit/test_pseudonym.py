@@ -77,3 +77,15 @@ def test_apply_is_right_to_left_so_earlier_offsets_stay_valid(tmp_path):
         _decision(21, 38, "EMAIL", "pseudonymize"),
     ]
     assert apply(text, decisions, pz) == "[PERSON_1] emailed [EMAIL_1]"
+
+
+def test_pseudonyms_number_in_reading_order(tmp_path):
+    from redactit.pseudonym import Pseudonymizer, apply
+    from redactit.types import Decision, Span
+    from redactit.vault import Vault
+
+    text = "Ann met Bob."
+    ds = [Decision(Span(0, 3, "PERSON", 0.9, "t"), "pseudonymize", "entities.PERSON", "r"),
+          Decision(Span(8, 11, "PERSON", 0.9, "t"), "pseudonymize", "entities.PERSON", "r")]
+    with Vault(tmp_path / "v.db", b"\x02" * 32) as v:
+        assert apply(text, ds, Pseudonymizer(v, "s")) == "[PERSON_1] met [PERSON_2]."

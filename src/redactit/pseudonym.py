@@ -23,19 +23,23 @@ class Pseudonymizer:
 
 
 def apply(text: str, decisions: list[Decision], pz: Pseudonymizer) -> str:
-    """Apply each decision's action to `text`. Right-to-left so earlier offsets stay valid."""
-    for d in sorted(decisions, key=lambda d: d.span.start, reverse=True):
-        start, end = d.span.start, d.span.end
-        original = text[start:end]
-        if d.action == "pseudonymize":
-            replacement = pz.label(d.span.entity_type, original)
-        elif d.action == "mask":
-            replacement = "".join("*" if c.isalnum() else c for c in original)
-        elif d.action in ("strike", "box"):
-            replacement = "█" * len(original)
-        elif d.action == "omit":
-            replacement = ""
-        else:
-            raise ValueError(f"unknown action: {d.action}")
-        text = text[:start] + replacement + text[end:]
-    return text
+    """Apply each decision's action to `text`, building the output left to right so
+    pseudonyms number in reading order ([PERSON_1] is the first person mentioned)."""
+    out, pos = [], 0
+    for d in sorted(decisions, key=lambda d: d.span.start):
+        original = text[d.span.start:d.span.end]
+        out.append(text[pos:d.span.start] + _replacement(d, original, pz))
+        pos = d.span.end
+    return "".join(out) + text[pos:]
+
+
+def _replacement(d: Decision, original: str, pz: Pseudonymizer) -> str:
+    if d.action == "pseudonymize":
+        return pz.label(d.span.entity_type, original)
+    if d.action == "mask":
+        return "".join("*" if c.isalnum() else c for c in original)
+    if d.action in ("strike", "box"):
+        return "█" * len(original)
+    if d.action == "omit":
+        return ""
+    raise ValueError(f"unknown action: {d.action}")
