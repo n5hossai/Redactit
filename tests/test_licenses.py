@@ -16,15 +16,12 @@ FLAGGED = {
     "defusedxml": "PSF-2.0 -- permissive; standard XML entity-attack guard for DOCX parsing",
     "numpy": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 -- aggregate of "
     "permissive/public-domain pieces (transitive via rapidocr-onnxruntime, test-only)",
+    "tqdm": "MPL-2.0 AND MIT -- file-level copyleft that applies only to tqdm's own files, "
+    "used unmodified; test-only progress bars pulled in by rapidocr-onnxruntime, never shipped",
 }
 
 # Not third-party runtime code we ship; excluded per the task brief.
 IGNORE = {"redactit", "pip", "setuptools", "wheel", "uv"}
-
-# tqdm's metadata literally reads "MPL-2.0 AND MIT", but tqdm's own LICENCE
-# file grants a *choice* of either license, not both at once -- we exercise
-# the MIT option, so this is not a real copyleft conflict despite the "AND".
-DUAL_CHOICE = {"tqdm": "MIT"}
 
 ALLOWED = re.compile(r"\b(MIT|Apache[- ]?2\.0|BSD|ISC)\b", re.I)
 COPYLEFT = re.compile(r"\b(AGPL|LGPL|GPL|MPL)\b", re.I)
@@ -62,9 +59,6 @@ def test_installed_dependencies_are_permissively_licensed():
         name = dist.metadata["Name"]
         key = name.lower()
         if key in IGNORE or key in FLAGGED:
-            continue
-        if key in DUAL_CHOICE:
-            assert _permissive(DUAL_CHOICE[key]), f"{name}: recorded dual-choice license is not permissive"
             continue
         text = _license_text(dist)
         if not text or not _license_ok(text):
