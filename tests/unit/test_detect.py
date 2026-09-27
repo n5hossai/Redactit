@@ -189,7 +189,8 @@ def test_passport_ca_style_detected(det):
     text = "Passport number: AB123456"
     spans = _spans_of(det, text, "PASSPORT")
     assert _covers(spans, text, "AB123456")
-    assert all(s.validated for s in spans)
+    # No checksum exists, so a passport is never "validated"; the cue makes it confident.
+    assert max(s.score for s in spans) >= 0.85 and not any(s.validated for s in spans)
 
 
 def test_passport_too_short_not_detected(det):
@@ -329,3 +330,85 @@ def test_a_date_is_a_confident_birth_date_only_after_a_cue(det):
 def test_military_addresses_are_whole_address_spans(det, addr):
     text = f"Ship to {addr} by Friday."
     assert any(text[s.start:s.end] == addr for s in _spans_of(det, text, "ADDRESS"))
+
+
+# --- Cases an independent review found surviving; each must now be detected. -------------
+
+def _rand(alphabet: str, n: int) -> str:
+    return "".join(random.Random(n).choice(alphabet) for _ in range(n))
+
+
+@pytest.mark.parametrize("email", ["priya.okafor@corp.local", "dmitri.volkov@acme.internal"])
+def test_emails_on_internal_domains(det, email):
+    assert _covers(_spans_of(det, f"Mail {email} today.", "EMAIL"), f"Mail {email} today.", email)
+
+
+@pytest.mark.parametrize("addr", [
+    "55 Oak Lane, Leeds LS1 4AB",
+    "17 Rue de la Paix, 75002 Paris, France",
+    "221B Baker Street, Marylebone, London NW1 6XE",
+    "Flat 4B, 1234 North Maple Street, Springfield",
+])
+def test_street_addresses_the_model_misses(det, addr):
+    text = f"Address: {addr}"
+    assert _covers(_spans_of(det, text, "ADDRESS"), text, addr)
+
+
+@pytest.mark.parametrize("text, dob", [
+    ("Date of birth: 12.03.1985", "12.03.1985"),
+    ("DOB: March 12th, 1985", "March 12th, 1985"),
+    ("Born 1985/03/12 in Leeds.", "1985/03/12"),
+])
+def test_birth_dates_in_more_formats(det, text, dob):
+    spans = [s for s in _spans_of(det, text, "DATE_OF_BIRTH") if text[s.start:s.end] == dob]
+    assert spans and spans[0].score >= 0.85
+
+
+def test_birth_dates_in_every_row_of_a_dob_column(det):
+    text = "| Name | DOB |\n|---|---|\n| A | 1985-03-12 |\n| B | 1990-01-02 |\n| C | 1991-02-03 |\n"
+    confident = {text[s.start:s.end] for s in _spans_of(det, text, "DATE_OF_BIRTH") if s.score >= 0.85}
+    assert confident == {"1985-03-12", "1990-01-02", "1991-02-03"}
+
+
+@pytest.mark.parametrize("text, phone", [
+    ("Call 555-0199 after six.", "555-0199"),
+    ("Mobile +33 6 12 34 56 78 in Paris.", "+33 6 12 34 56 78"),
+    ("Desk 416–555–0199 ext.", "416–555–0199"),
+])
+def test_more_phone_formats(det, text, phone):
+    spans = [s for s in _spans_of(det, text, "PHONE") if s.score >= 0.8]
+    assert _covers(spans, text, phone)
+
+
+@pytest.mark.parametrize("secret", [
+    "ghu_" + _rand(string.ascii_letters + string.digits, 36),
+    "ghr_" + _rand(string.ascii_letters + string.digits, 37),
+    "hf_" + _rand(string.ascii_letters + string.digits, 34),
+    "glpat-" + _rand(string.ascii_letters + string.digits, 20),
+])
+def test_more_token_families(det, secret):
+    assert _covers(_spans_of(det, f"token={secret}", "API_KEY"), f"token={secret}", secret)
+
+
+def test_aws_secret_key_after_its_cue(det):
+    secret = _rand(string.ascii_letters + string.digits + "/+", 40)
+    text = f"aws_secret_access_key = {secret}"
+    assert any(s.score >= 0.85 for s in _spans_of(det, text, "API_KEY") if text[s.start:s.end] == secret)
+
+
+@pytest.mark.parametrize("block", [
+    "-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: 1\n\n" + _rand(string.ascii_letters, 64) + "\n-----END PGP PRIVATE KEY BLOCK-----",
+    "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\n" + _rand(string.ascii_letters, 64) + "\n-----END RSA PRIVATE KEY-----",
+    "-----BEGIN PRIVATE KEY-----\n" + _rand(string.ascii_letters, 64) + "\n",  # END line cut off
+])
+def test_private_key_blocks_including_headers_and_truncation(det, block):
+    assert _covers(_spans_of(det, block, "API_KEY"), block, block.rstrip("\n"))
+
+
+@pytest.mark.parametrize("text, value, entity", [
+    ("passport: ab123456", "ab123456", "PASSPORT"),
+    ("NI number AB-12-34-56-C", "AB-12-34-56-C", "UK_NINO"),
+    ("SSN 123-45 6789 on file", "123-45 6789", "US_SSN"),
+])
+def test_id_formats_with_other_case_and_separators(det, text, value, entity):
+    assert _covers(_spans_of(det, text, entity), text, value)
