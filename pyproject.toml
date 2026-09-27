@@ -13,13 +13,21 @@ redactit = "redactit.cli:main"
 
 [dependency-groups]
 dev = ["pytest==9.1.1", "pytest-socket==0.8.1"]
-# Builds the synthetic test corpus. Never shipped.
-corpus = ["Faker==40.39.0", "reportlab==5.0.1", "Pillow==12.3.0", "zxing-cpp==3.1.1"]
-# Re-extracts redacted outputs for the leak test. Never shipped.
-leak = ["pypdfium2==5.13.0", "rapidocr-onnxruntime==1.4.4", "Pillow==12.3.0", "zxing-cpp==3.1.1"]
+# Builds the synthetic corpus and re-extracts outputs for the leak test. Never shipped.
+leak = [
+  "Faker==40.39.0", "reportlab==5.0.1", "Pillow==12.3.0", "zxing-cpp==3.1.1",
+  "pypdfium2==5.13.0", "rapidocr-onnxruntime==1.4.4",
+]
 
 [tool.uv]
-default-groups = ["dev", "corpus", "leak"]
+default-groups = ["dev", "leak"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests/corpus", "tests/leak"]
+# The engine must never make a network call; --disable-socket makes any
+# attempt fail the test instead of leaking data silently.
+addopts = "--disable-socket"
 
 [build-system]
 requires = ["hatchling"]

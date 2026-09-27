@@ -310,40 +310,32 @@ version = "0.1.0"
 source = { editable = "." }
 
 [package.dev-dependencies]
-corpus = [
-    { name = "faker" },
-    { name = "pillow" },
-    { name = "reportlab" },
-    { name = "zxing-cpp" },
-]
 dev = [
     { name = "pytest" },
     { name = "pytest-socket" },
 ]
 leak = [
+    { name = "faker" },
     { name = "pillow" },
     { name = "pypdfium2" },
     { name = "rapidocr-onnxruntime" },
+    { name = "reportlab" },
     { name = "zxing-cpp" },
 ]
 
 [package.metadata]
 
 [package.metadata.requires-dev]
-corpus = [
-    { name = "faker", specifier = "==40.39.0" },
-    { name = "pillow", specifier = "==12.3.0" },
-    { name = "reportlab", specifier = "==5.0.1" },
-    { name = "zxing-cpp", specifier = "==3.1.1" },
-]
 dev = [
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-socket", specifier = "==0.8.1" },
 ]
 leak = [
+    { name = "faker", specifier = "==40.39.0" },
     { name = "pillow", specifier = "==12.3.0" },
     { name = "pypdfium2", specifier = "==5.13.0" },
     { name = "rapidocr-onnxruntime", specifier = "==1.4.4" },
+    { name = "reportlab", specifier = "==5.0.1" },
     { name = "zxing-cpp", specifier = "==3.1.1" },
 ]
 
