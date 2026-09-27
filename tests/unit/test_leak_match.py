@@ -1,37 +1,53 @@
-"""The leak harness's matcher decides what counts as a surviving value, so it gets its own tests."""
+"""The leak harness's matcher decides what counts as a surviving value, so it gets its own tests.
 
-import importlib.util
-from pathlib import Path
+Each "still a leak" case below is a way a real redactor could fail while a naive matcher
+reports success.
+"""
 
-_spec = importlib.util.spec_from_file_location("leak_run", Path(__file__).parents[1] / "leak" / "run.py")
-leak = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(leak)
-
-
-def found(value: str, text: str) -> bool:
-    return leak.fuzzy_contains(leak.normalize(value), leak.normalize(text))
+import pytest
+import run as leak
 
 
-def test_separators_and_line_breaks_do_not_hide_a_value():
-    assert found("4111 1111 1111 1111", "card: 4111-1111\n1111 1111 thanks")
+def survives(entity_type: str, value: str, text: str, source: str = "out.md:text") -> bool:
+    """Mirror run(): the whole value (fuzzy), or any identifying part (whole word)."""
+    whole = leak.survives(value, source, leak.normalize(text))
+    return whole or any(leak.words(p) in leak.words(text) for p in leak.parts(entity_type, value))
 
 
-def test_one_ocr_error_still_counts_as_a_leak():
-    assert found("Priya Okafor", "Contact Priya 0kafor today")
+@pytest.mark.parametrize(
+    ("entity_type", "value", "text"),
+    [
+        ("CREDIT_CARD", "4111 1111 1111 1111", "card: 4111-1111\n1111 1111 thanks"),
+        ("PERSON", "Priya Okafor", "Contact Priya 0kafor today"),  # one OCR error
+        ("PERSON", "Priya Okafor", "Contact [PERSON_1] Okafor today"),  # first name only
+        ("PERSON", "Siobhan O'Brien", "Dear Siobhan O&#x27;Brien,"),  # HTML-escaped output
+        ("EMAIL", "priya.okafor@example.com", "mail priya.okafor&#64;example.com"),
+        ("PERSON", "Zoë Hart", "Zoë Hart"),  # decomposed accent (NFD)
+        ("CA_SIN", "046 454 286", "SIN ０４６ 454 286"),  # fullwidth digits
+        ("ADDRESS", "123 Maple Crescent, Springfield, IL 62704", "[NUM] Maple Crescent, [CITY]"),
+        ("API_KEY", "-----BEGIN PRIVATE KEY-----\nAbCdEfGh12345678+/\n-----END PRIVATE KEY-----",
+         "[API_KEY]\nAbCdEfGh12345678+/\n[API_KEY]"),  # only the armour lines were matched
+    ],
+)
+def test_still_a_leak(entity_type, value, text):
+    assert survives(entity_type, value, text)
 
 
-def test_two_errors_do_not_match():
-    assert not found("Priya Okafor", "Contact Pria 0kafor today")
+def test_ocr_gets_more_edits_and_folds_look_alikes():
+    iban, misread = "GB82WEST12345698765432", "G882WEST1234S698765432"  # B->8, 5->S
+    assert not survives("IBAN", iban, misread, source="out.png:bytes")
+    assert survives("IBAN", iban, misread, source="out.png:image_ocr")
 
 
-def test_short_values_need_an_exact_hit():
-    assert found("AB12", "ref ab12")
-    assert not found("AB12", "ref ab13")
-
-
-def test_pseudonym_is_not_a_leak():
-    assert not found("Priya Okafor", "Contact [PERSON_1] today")
-
-
-def test_masked_card_keeping_last_four_is_not_a_full_leak():
-    assert not found("4111 1111 1111 1234", "card **** **** **** 1234")
+@pytest.mark.parametrize(
+    ("entity_type", "value", "text"),
+    [
+        ("PERSON", "Priya Okafor", "Contact [PERSON_1] today"),
+        ("PERSON", "Priya Okafor", "Contact Pria 0kafor today"),  # two edits, not OCR
+        ("PERSON", "Dr. Priya Okafor", "Dr. [PERSON_1] replied"),  # honorific is not a part
+        ("CREDIT_CARD", "4111 1111 1111 1234", "card **** **** **** 1234"),  # last-four mask
+        ("PASSPORT", "AB12", "ref ab13"),  # short values need an exact hit
+    ],
+)
+def test_not_a_leak(entity_type, value, text):
+    assert not survives(entity_type, value, text)
