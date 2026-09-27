@@ -1,6 +1,7 @@
 """Command-line interface: `redactit redact`, `redactit setup-models`."""
 
 import argparse
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -13,11 +14,11 @@ TEXT_SUFFIXES = {".txt", ".md"}
 
 
 def _paths() -> dict[str, Path]:
-    user_data = platformdirs.user_data_path("redactit", appauthor=False)
+    # The user's own data may move (REDACTIT_DATA_DIR, e.g. for tests); the admin policy
+    # path never follows the environment (see managed.py).
+    user_data = Path(os.environ.get("REDACTIT_DATA_DIR") or platformdirs.user_data_path("redactit", appauthor=False))
     return {
         "policy": platformdirs.user_config_path("redactit", appauthor=False) / "policy.yaml",
-        # Admin-writable only, e.g. %ProgramData%\redactit or /etc/xdg/redactit.
-        "managed": platformdirs.site_config_path("redactit", appauthor=False) / "policy.yaml",
         "vault": user_data / "vault.db",
         "audit": user_data / "audit.jsonl",
     }
@@ -28,13 +29,18 @@ def _redact(args: argparse.Namespace) -> int:
 
     safety.block_network()  # before any detector or model code is imported and run
     from redactit.audit import AuditLog
+    from redactit.managed import assert_admin_owned, managed_policy_path
     from redactit.pipeline import Engine
     from redactit.policy import load_policy
     from redactit.vault import Vault
 
     paths = _paths()
     user_policy = args.policy or (paths["policy"] if paths["policy"].is_file() else None)
-    managed = paths["managed"] if paths["managed"].is_file() else None
+    managed = managed_policy_path()
+    if managed.is_file():
+        assert_admin_owned(managed)
+    else:
+        managed = None
     engine = Engine(load_policy(user_policy, managed), Vault.open(paths["vault"]), AuditLog(paths["audit"]))
     scope = args.scope or uuid.uuid4().hex  # a fresh scope per call unless the caller links runs
     args.out.mkdir(parents=True, exist_ok=True)
@@ -82,10 +88,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.run(args)
     except Exception as exc:  # noqa: BLE001
-        # Only our own message types reach the terminal; others could quote the input text.
-        from redactit.models import ModelError
+        # Only our own errors print their message; another library's could quote the input.
+        from redactit.types import RedactitError
 
-        msg = str(exc) if isinstance(exc, ModelError) else f"{type(exc).__name__} (details withheld: may contain input text)"
+        msg = str(exc) if isinstance(exc, RedactitError) else f"{type(exc).__name__} (details withheld: may contain input text)"
         print(f"error: {msg}", file=sys.stderr)
         return 1
 
