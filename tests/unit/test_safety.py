@@ -6,11 +6,21 @@ import pytest
 from redactit import safety
 
 
-def test_block_network_refuses_ip_sockets_and_dns(monkeypatch):
-    monkeypatch.setattr(socket, "socket", socket.socket)  # restored after the test
-    monkeypatch.setattr(socket, "getaddrinfo", socket.getaddrinfo)
+@pytest.fixture
+def blocked(monkeypatch):
+    for name in ("socket", *safety._DNS_CALLS):
+        monkeypatch.setattr(socket, name, getattr(socket, name))  # restored after the test
     safety.block_network()
+
+
+@pytest.mark.parametrize("family", [socket.AF_INET, socket.AF_INET6, -1], ids=["ipv4", "ipv6", "auto"])
+def test_every_non_unix_socket_is_refused(blocked, family):
     with pytest.raises(safety.NetworkBlocked):
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket.socket(family, socket.SOCK_STREAM)
+
+
+@pytest.mark.parametrize("call", ["getaddrinfo", "gethostbyname", "gethostbyname_ex", "getnameinfo"])
+def test_every_dns_lookup_is_refused(blocked, call):
+    args = (("93.184.216.34", 443), 0) if call == "getnameinfo" else ("example.com",)
     with pytest.raises(safety.NetworkBlocked):
-        socket.getaddrinfo("example.com", 443)
+        getattr(socket, call)(*args)
