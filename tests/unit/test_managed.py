@@ -13,6 +13,16 @@ def test_environment_cannot_move_the_admin_policy(monkeypatch, tmp_path):
     assert managed_policy_path() == before
 
 
+def _elevated_windows() -> bool:
+    import ctypes
+    import sys
+
+    return sys.platform == "win32" and bool(ctypes.windll.shell32.IsUserAnAdmin())
+
+
+# An elevated admin's new files are owned by Administrators, which is exactly an admin-owned
+# policy, so the forgery this test builds only exists for a standard user (CI runs elevated).
+@pytest.mark.skipif(_elevated_windows(), reason="an elevated admin legitimately owns the policy")
 def test_a_policy_file_the_user_owns_is_refused(tmp_path):
     forged = tmp_path / "policy.yaml"
     forged.write_text("dial: {admin_floor: 1}\n", encoding="utf-8")

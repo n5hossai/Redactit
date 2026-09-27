@@ -13,6 +13,7 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false  # one OS failing must not hide the others' results
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     env:
