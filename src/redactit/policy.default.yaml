@@ -4,7 +4,7 @@ version: 1
 
 dial:
   position: 3        # 1 (loosest) to 5 (tightest)
-  admin_floor: 2     # users cannot turn the dial below this
+  admin_floor: 3     # users cannot go below this; it is the lowest dial the leak test proves
 
 review:
   mode: low_confidence_only   # or: always

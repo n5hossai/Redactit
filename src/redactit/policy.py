@@ -40,7 +40,7 @@ class EntityConfig(_Strict):
 
 class DialConfig(_Strict):
     position: int = Field(default=3, ge=1, le=5)
-    admin_floor: int = Field(default=1, ge=1, le=5)
+    admin_floor: int = Field(default=3, ge=1, le=5)
 
 
 class ReviewConfig(_Strict):

@@ -79,7 +79,7 @@ def test_user_may_lock_a_type_managed_left_unlocked(tmp_path):
 
 
 def test_site_dial_raises_but_never_lowers(tmp_path):
-    managed = write(tmp_path / "managed.yaml", "sites:\n  chatgpt.com: {dial: 4}\n")
+    managed = write(tmp_path / "managed.yaml", "dial: {admin_floor: 1}\nsites:\n  chatgpt.com: {dial: 4}\n")
     user = write(tmp_path / "user.yaml", "dial: {position: 2}\nsites:\n  chatgpt.com: {dial: 1}\n")
     policy = load_policy(user=user, managed=managed)
     assert policy.effective_dial("chatgpt.com") == 4
