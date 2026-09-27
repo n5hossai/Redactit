@@ -13,7 +13,9 @@ from typing import Any, Callable
 ACTIONS = {"pseudonymize", "mask", "strike", "omit", "box"}
 _REASON_CODES = {"host_down", "timeout", "review_timeout", "policy_block"}
 _ENTITY_TYPE_RE = re.compile(r"^[A-Z_]{2,32}$")
-_RULE_ID_RE = re.compile(r"^[a-z0-9_.]{1,64}$")
+# Lower-case ids, or "entities.<ENTITY_TYPE>" as the policy names its rules. Mixed case is
+# refused so a name like "Okafor" can never pass as an identifier.
+_RULE_ID_RE = re.compile(r"^([a-z0-9_.]{1,64}|entities\.[A-Z_]{2,32})$")
 _FILE_TYPE_RE = re.compile(r"^[a-z0-9]{1,8}$")
 _HOSTNAME_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$")
 _DESTINATIONS = {"outbox", "clipboard", "cli"}

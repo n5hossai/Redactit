@@ -32,3 +32,4 @@ class Decision:
     rule_id: str
     reason: str
     needs_review: bool = False
+    threshold: float = 0.0  # the score this decision had to reach, for the audit log
