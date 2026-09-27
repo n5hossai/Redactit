@@ -23,6 +23,7 @@ from pathlib import Path
 from faker import Faker
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from corpus_docx import DOCX_VARIANTS, build_docx
 
 LOCALES = ["en_US", "en_CA", "en_GB"]
 
@@ -277,7 +278,9 @@ def build_md(vf: ValueFactory, path: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 # (format, variant, extension, builder(vf, path) -> entries)
-_PLAN = [("txt", "plain", "txt", build_txt), ("md", "plain", "md", build_md)]
+_PLAN = [("txt", "plain", "txt", build_txt), ("md", "plain", "md", build_md)] + [
+    ("docx", v, "docx", lambda vf, path, v=v: build_docx(v, vf, path)) for v in DOCX_VARIANTS
+]
 
 
 def generate(seed: int, out: Path, per_variant: int) -> dict:
