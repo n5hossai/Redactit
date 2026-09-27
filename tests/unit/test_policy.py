@@ -9,7 +9,7 @@ import pytest
 from redactit.policy import Policy, load_policy
 from redactit.types import Span
 
-EXAMPLE = Path(__file__).resolve().parents[2] / "policy.example.yaml"
+EXAMPLE = Path(__file__).resolve().parents[2] / "src" / "redactit" / "policy.default.yaml"
 
 
 def write(path: Path, text: str) -> Path:
@@ -194,3 +194,18 @@ def test_vault_retention_takes_the_stricter_value(tmp_path):
     user = write(tmp_path / "user.yaml", "vault: {retention_days: 7}\n")
     policy = load_policy(user=user, managed=managed)
     assert policy.vault.retention_days == 7
+
+
+def test_no_policy_files_still_redacts_everything_by_default():
+    policy = load_policy(None)
+    assert policy.entities["PERSON"].action == "pseudonymize"
+    assert policy.entities["CREDIT_CARD"].locked
+
+
+def test_admin_may_loosen_a_default_but_a_user_may_not(tmp_path):
+    managed = tmp_path / "managed.yaml"
+    managed.write_text("entities:\n  DATE_OF_BIRTH: {enabled: false}\n", encoding="utf-8")
+    assert not load_policy(None, managed).entities["DATE_OF_BIRTH"].enabled
+    user = tmp_path / "user.yaml"
+    user.write_text("entities:\n  PERSON: {enabled: false}\n", encoding="utf-8")
+    assert load_policy(user).entities["PERSON"].enabled

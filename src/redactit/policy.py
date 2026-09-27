@@ -26,14 +26,14 @@ class _Strict(BaseModel):
 
 
 class EntityConfig(_Strict):
-    action: str
+    action: str | None = None  # None in a user file means "keep the admin's action"
     locked: bool = False
     enabled: bool = True
 
     @field_validator("action")
     @classmethod
-    def _valid_action(cls, v: str) -> str:
-        if v not in ACTIONS:
+    def _valid_action(cls, v: str | None) -> str | None:
+        if v is not None and v not in ACTIONS:
             raise ValueError(f"must be one of {sorted(ACTIONS)}")
         return v
 
@@ -135,23 +135,22 @@ class Policy(_Strict):
                     rule_id=f"entities.{span.entity_type}",
                     reason=reason,
                     needs_review=needs_review,
+                    threshold=threshold,
                 )
             )
         decisions.sort(key=lambda d: d.span.start)
         return decisions
 
 
-def _tighten_bool(field: str, default: bool, m: EntityConfig | None, u: EntityConfig | None) -> bool:
-    """OR-merge that respects "not specified" so a managed default can't silently win."""
-    m_set = m is not None and field in m.model_fields_set
-    u_set = u is not None and field in u.model_fields_set
-    if m_set and u_set:
-        return getattr(m, field) or getattr(u, field)
-    if m_set:
-        return getattr(m, field)
-    if u_set:
+def _tighten_bool(field: str, m: EntityConfig | None, u: EntityConfig | None) -> bool:
+    """The admin's effective value, which the user can switch on but never off.
+
+    Checking only what each file explicitly set would let a user's `enabled: false` win
+    whenever the admin left `enabled` at its default, which is a loosening.
+    """
+    if m is None:
         return getattr(u, field)
-    return default
+    return getattr(m, field) or (u is not None and field in u.model_fields_set and getattr(u, field))
 
 
 def _dedup(items: list[str]) -> list[str]:
@@ -171,11 +170,12 @@ def _merge(managed: Policy, user: Policy) -> Policy:
     entities: dict[str, EntityConfig] = {}
     for etype in managed.entities.keys() | user.entities.keys():
         m, u = managed.entities.get(etype), user.entities.get(etype)
-        action = (u.action if u is not None else None) or (m.action if m is not None else None)
+        # Every action removes the raw value, so choosing one is formatting, not loosening.
+        action = (u.action if u is not None else None) or (m.action if m is not None else None) or "strike"
         entities[etype] = EntityConfig(
             action=action,
-            locked=_tighten_bool("locked", False, m, u),
-            enabled=_tighten_bool("enabled", True, m, u),
+            locked=_tighten_bool("locked", m, u),
+            enabled=_tighten_bool("enabled", m, u),
         )
 
     sites: dict[str, SiteConfig] = {}
@@ -201,13 +201,28 @@ def _merge(managed: Policy, user: Policy) -> Policy:
     )
 
 
-def _load_one(path: Path) -> Policy:
+DEFAULT_POLICY = Path(__file__).with_name("policy.default.yaml")
+
+
+def _read(path: Path) -> dict:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as e:
         raise ValueError(f"{path}: invalid YAML: {e}") from e
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: policy file must be a mapping")
+    return raw
+
+
+def _deep_update(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _deep_update(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def _load_one(path: Path, base: dict | None = None) -> Policy:
+    raw = _deep_update(base, _read(path)) if base else _read(path)
     try:
         policy = Policy(**raw)
     except ValidationError as e:
@@ -222,7 +237,12 @@ def _load_one(path: Path) -> Policy:
 
 
 def load_policy(user: Path | None, managed: Path | None = None) -> Policy:
-    """Load and tighten-only-merge the user and managed policy files (either may be absent)."""
-    managed_policy = _load_one(managed) if managed is not None else Policy()
+    """Built-in defaults, overridden by the admin's managed file, then tightened by the user's.
+
+    The defaults are the base layer so that having no policy file never means redacting
+    nothing. The admin may loosen a default (the admin owns the risk); the user never can.
+    """
+    defaults = _read(DEFAULT_POLICY)
+    admin = _load_one(managed, base=defaults) if managed is not None else _load_one(DEFAULT_POLICY)
     user_policy = _load_one(user) if user is not None else Policy()
-    return _merge(managed_policy, user_policy)
+    return _merge(admin, user_policy)

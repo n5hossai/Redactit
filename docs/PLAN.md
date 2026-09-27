@@ -126,7 +126,7 @@ Redactit/
 ├─ pyproject.toml            # deps, entry point `redactit`
 ├─ uv.lock
 ├─ models.lock.json          # model name, URL, revision, SHA-256
-├─ policy.example.yaml       # annotated default policy
+├─ src/redactit/policy.default.yaml  # annotated default policy, the base layer
 ├─ src/redactit/
 │  ├─ cli.py                 # redact, verify, clip, watch, setup-models
 │  ├─ types.py               # Segment, Span, Decision
