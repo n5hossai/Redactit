@@ -17,6 +17,9 @@ FLAGGED = {
     "tqdm": "MPL-2.0 AND MIT: file-level copyleft on tqdm's own files, used unmodified; via rapidocr",
     "opencv-python": "Apache-2.0, but the wheel bundles FFmpeg (LGPL-2.1) as a separate DLL; via rapidocr",
     "shapely": "BSD-3, but the wheel bundles GEOS (LGPL-2.1) as a separate library; via rapidocr",
+    # Runtime from Phase 3. Its GPL mentions are ICU's autoconf macros (GPL with the
+    # Autoconf exception, build scripts only) and the LLVM exception clause naming GPLv2.
+    "pypdfium2": "BSD-3/Apache-2.0; bundled notices mention GPL only in build-script and exception text",
 }
 
 ALLOWED = re.compile(r"\b(MIT|Apache|BSD|ISC)\b", re.I)
@@ -33,9 +36,14 @@ def _declared(dist: metadata.Distribution) -> str:
 
 
 def _bundled(dist: metadata.Distribution) -> str:
-    """Text of every license-like file shipped in the wheel."""
-    names = re.compile(r"(^|/)(LICEN[CS]E|COPYING|NOTICE)[^/]*$", re.I)
-    return " ".join(f.locate().read_text(errors="ignore") for f in dist.files or [] if names.search(str(f)))
+    """Text of every license file shipped in the wheel.
+
+    Matching by name alone misses vendored notices such as pypdfium2's BUILD_LICENSES/*.txt,
+    so everything under the PEP 639 `.dist-info/licenses/` folder is read as well.
+    """
+    names = re.compile(r"(^|/)(LICEN[CS]E|COPYING|NOTICE)[^/]*$|\.dist-info/licenses/", re.I)
+    files = [f for f in dist.files or [] if names.search(f.as_posix())]
+    return " ".join(f.locate().read_text(errors="ignore") for f in files)
 
 
 def test_installed_dependencies_are_permissively_licensed():

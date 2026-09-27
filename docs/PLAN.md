@@ -252,6 +252,7 @@ are committed.
 | Pillow | MIT-CMU (historical PIL license) | Permissive, MIT-equivalent terms; the only mature raster PDF writer without LGPL |
 | defusedxml | PSF-2.0 | Permissive; the standard defence against XML entity attacks in untrusted DOCX |
 | torch (only if option (a) in 3.1 is chosen) | BSD-3 plus bundled libraries | Bundled Intel MKL license is **unverified**; must be checked before it is accepted |
+| pypdfium2 | BSD-3 / Apache-2.0; bundled PDFium notices mention GPL | Mentions are ICU's autoconf macros (GPL with the Autoconf exception, build scripts only) and the LLVM exception clause; no copyleft code in the binary |
 | OpenCV wheels (runtime from Phase 3: RapidOCR, YuNet) | Apache-2.0, but every wheel bundles FFmpeg (LGPL-2.1) as a separate DLL | **Open decision for Phase 3.** LGPL permits unmodified dynamic use. The alternative is building OpenCV without video I/O. |
 
 Test-only exceptions (never shipped), enforced in `tests/test_licenses.py`: numpy
