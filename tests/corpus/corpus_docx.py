@@ -137,7 +137,6 @@ def _core_xml(creator: str, last_modified_by: str) -> bytes:
 
 
 def _write_docx(path: Path, parts: dict[str, bytes]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
         for name, data in parts.items():
             info = zipfile.ZipInfo(name, date_time=_FIXED_TIME)

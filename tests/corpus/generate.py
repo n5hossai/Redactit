@@ -235,7 +235,6 @@ def build_txt(vf: ValueFactory, path: Path) -> list[dict]:
         f"Date of birth on file: {dob}. Card on file: {card}.\n\n"
         f"{vf.filler_paragraph()}\n"
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
     return entries
 
@@ -269,7 +268,6 @@ def build_md(vf: ValueFactory, path: Path) -> list[dict]:
         f"## Notes\n\n{vf.filler_paragraph()}\n\n"
         f'```bash\nexport API_KEY="{key}"\n```\n'
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
     return entries
 

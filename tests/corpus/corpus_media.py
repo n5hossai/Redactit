@@ -20,9 +20,8 @@ import PIL.ExifTags as ExifTags
 import zxingcpp
 
 PDF_VARIANTS = ["digital", "split_lines", "scanned", "mixed"]
-IMAGE_VARIANTS = ["plain"]
 
-FONT_SIZE = 32  # >=28px glyph height, comfortably OCR-readable
+FONT_SIZE = 32  # capitals render ~23 px tall, lowercase ~18 px: RapidOCR reads both reliably
 _FONT = ImageFont.load_default(size=FONT_SIZE)
 LOW_CONTRAST_GRAY = (140, 140, 140)  # on white: contrast ratio ~3.36, still >=3:1
 
@@ -188,7 +187,6 @@ def build_image(fmt: str, vf, path: Path) -> list[dict]:
     gps[ExifTags.GPS.GPSLongitudeRef] = "W"
     gps[ExifTags.GPS.GPSLongitude] = (79.0, 23.0, 0.0)
 
-    path.parent.mkdir(parents=True, exist_ok=True)
     if fmt == "jpg":
         img.save(path, format="JPEG", quality=90, exif=exif)
     else:
