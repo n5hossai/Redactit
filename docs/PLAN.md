@@ -109,9 +109,9 @@ The acceptance bar is zero surviving seeded values, so recall matters more than 
 **Checkpoint:** `knowledgator/gliner-pii-base-v1.0` (Apache-2.0, English-tuned, 60+ PII
 labels, ships ONNX weights). `knowledgator/gliner-pii-edge-v1.0` is the lighter fallback
 if shortcut latency is too high. `nvidia/gliner-PII` is excluded because it uses a custom
-license. Presidio ships `GLiNERRecognizer` (installed via `presidio-analyzer[gliner]`),
-so the integration needs no custom recognizer code. Revision and SHA-256 go in
-`models.lock.json`.
+license. The model runs outside Presidio (see the decision below); its spans join the
+Presidio pattern spans before the policy decides. Revision and SHA-256 are pinned in
+`src/redactit/models.lock.json`.
 
 **Decided in Phase 2:** the `gliner` package (and its `torch` dependency, whose bundled
 MKL license was unverified) is not used. `detect/ner.py` runs the full-precision ONNX
@@ -134,13 +134,14 @@ Redactit/
 │  ├─ pseudonym.py           # [TYPE_N] allocation per chat scope
 │  ├─ vault.py               # encrypted mapping store, 30-day purge
 │  ├─ audit.py               # JSONL writer, sanitised reasons only
-│  ├─ safety.py              # private temp dir, log filter, offline guards
+│  ├─ safety.py              # blocks IP sockets and DNS inside the engine
+│  ├─ managed.py             # OS-derived admin policy path, admin-ownership check
 │  ├─ models.py              # load-time SHA-256 verification
 │  ├─ detect/
 │  │  ├─ patterns.py         # regexes + validators (Luhn, IBAN, SIN, SSN, NINO)
 │  │  ├─ secrets.py          # API key and token formats, PEM blocks, JWTs
 │  │  ├─ dictionary.py       # company terms, allowlist
-│  │  └─ ner.py              # GLiNER recognizer for Presidio
+│  │  └─ ner.py              # GLiNER on onnxruntime, token-budget windows
 │  ├─ formats/
 │  │  ├─ text.py             # .txt / .md
 │  │  ├─ docx.py             # body, headers, footers, notes, comments, revisions
@@ -192,10 +193,15 @@ are committed.
 
 ## 6. Policy, dial and pseudonyms
 
-- **Layers.** A managed policy (admin-writable only, e.g. `%ProgramData%\Redactit\policy.yaml`
-  or `/etc/redactit/policy.yaml`) is merged with the user policy. The merge is
-  **tighten-only**: a user can raise the dial, add terms, or enable types, but cannot go
-  below the admin floor or unlock locked types.
+- **Layers.** Built-in defaults (`policy.default.yaml`), overridden by the admin's managed
+  policy, then merged with the user policy. The managed path comes from the OS
+  (`C:\ProgramData\Redactit\policy.yaml` via the known-folder API, `/etc/redactit`,
+  `/Library/Application Support/Redactit`), never from environment variables, and a file
+  the current user owns is refused. The user merge is **tighten-only**: a user can raise
+  the dial, add terms, or enable types, but cannot go below the admin floor, unlock locked
+  types, or allowlist values (only the admin can).
+- **Per-site rules.** `sites.<host>.dial` raises the dial for one AI site (e.g. chatgpt.com
+  at 4); it can never lower it.
 - **Dial 1 to 5.** Maps to a per-entity-type score threshold. The default is 3, and so
   is the default admin floor: it is the lowest dial the leak test proves, so a user
   cannot go below it unless an admin lowers the floor. Contact details sit 0.05 lower;
@@ -241,8 +247,8 @@ are committed.
 - Temporary files go in a private directory (`0700` on POSIX, user-only ACL on Windows),
   deleted in `finally`. In-memory processing is the default.
 - Models are downloaded once by `redactit setup-models`, pinned by SHA-256, and verified at
-  every load. At runtime the engine sets the Hugging Face offline flags and never
-  downloads anything.
+  every load. At runtime the engine blocks every non-Unix socket and every DNS lookup in
+  its own process, so no dependency can phone home.
 - CI runs a license check that fails on anything outside MIT, Apache or BSD unless it is
   listed here.
 - Synthetic data only. Real documents are never committed.
