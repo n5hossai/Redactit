@@ -102,3 +102,30 @@ class DateOfBirthRecognizer(PatternRecognizer):
             context=self.CONTEXT,
             global_regex_flags=re.MULTILINE | re.IGNORECASE,
         )
+
+
+class PhonePatternRecognizer(PatternRecognizer):
+    """Phone numbers by shape: a country or trunk prefix, an area code in brackets or
+    followed by a separator, then a 6-8 digit subscriber part and optional extension.
+
+    Replaces Presidio's phonenumbers-based recogniser, which at the leniency needed for
+    synthetic (often unassigned) numbers also matched dates, card groups and ZIP codes.
+    Overlaps with validated cards or SINs are resolved in their favour by the policy.
+    """
+
+    PATTERNS = [
+        Pattern(
+            "Phone with area code",
+            r"(?<![\w+])(?:\+\d{1,3}[\s.-]?|00\d{1,3}[\s.-]?|1[\s.-])?(?:\(0\)\s?)?"
+            r"(?:\(\d{2,5}\)[\s.-]?|\d{2,5}[\s.-])\d{3,4}[\s.-]?\d{3,4}"
+            r"(?:\s?(?:x|ext\.?|#)\s?\d{1,6})?(?!\w)",
+            0.8,
+        ),
+        Pattern("Phone E.164", r"(?<![\w+])\+\d{10,14}(?!\w)", 0.8),
+        # Bare 10-11 digits are usually a phone next to a name; other long numbers (account
+        # ids, timestamps) get masked as PHONE too, which is the safe direction to be wrong.
+        Pattern("Phone bare digits", r"(?<![\w+])\d{10,11}(?!\w)", 0.6),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__(supported_entity="PHONE", patterns=self.PATTERNS, global_regex_flags=re.IGNORECASE)

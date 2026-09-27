@@ -294,3 +294,29 @@ def test_corpus_seed7_txt_md_full_coverage(tmp_path):
                 for s in spans
             )
             assert covered, f"{doc['file']}: {entity_type} {value!r} not fully covered"
+
+
+@pytest.mark.parametrize(
+    "phone",
+    ["(890)283-0166x131", "983-016-6131", "+44(0)116 496 0233", "554-323-1948 x757",
+     "1 (140) 611-4307", "001-202-555-0147", "+441514960543", "202.555.0147"],
+)
+def test_formatted_phones_score_above_the_default_threshold(det, phone):
+    spans = _spans_of(det, f"Reach us at {phone} today.", "PHONE")
+    assert any(det_s.score >= 0.8 for det_s in spans), spans
+
+
+def test_bare_digit_phone_is_confident_next_to_a_contact_cue(det):
+    text = "Please contact Christopher Murray at cm@example.com or 01174960825 about it."
+    assert max(s.score for s in _spans_of(det, text, "PHONE")) >= 0.85
+
+
+def test_dates_ip_addresses_and_versions_are_not_phones(det):
+    assert _spans_of(det, "Released 1965-03-11 as v3.8.16 on host 192.168.1.100.", "PHONE") == []
+
+
+def test_a_date_is_a_confident_birth_date_only_after_a_cue(det):
+    cued = _spans_of(det, "Date of birth on file: 1965-03-11.", "DATE_OF_BIRTH")
+    bare = _spans_of(det, "The meeting moved to 1965-03-11.", "DATE_OF_BIRTH")
+    assert max(s.score for s in cued) >= 0.85
+    assert all(s.score < 0.35 for s in bare)

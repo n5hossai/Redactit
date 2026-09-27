@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import replace
+
 import tldextract
 from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
@@ -9,7 +12,6 @@ from presidio_analyzer.predefined_recognizers import (
     CreditCardRecognizer,
     EmailRecognizer,
     IbanRecognizer,
-    PhoneRecognizer,
     UkNinoRecognizer,
     UsSsnRecognizer,
 )
@@ -17,7 +19,13 @@ from presidio_analyzer.predefined_recognizers import (
 from redactit.types import Span
 
 from .dictionary import CompanyTermRecognizer
-from .patterns import MASTERCARD_2_SERIES, CaSinRecognizer, DateOfBirthRecognizer, PassportRecognizer
+from .patterns import (
+    MASTERCARD_2_SERIES,
+    CaSinRecognizer,
+    DateOfBirthRecognizer,
+    PassportRecognizer,
+    PhonePatternRecognizer,
+)
 from .secrets import ApiKeyRecognizer
 
 # Entity types whose recognizer only ever returns a result after a checksum or an exact
@@ -34,7 +42,6 @@ _VALIDATED_TYPES = {
     "COMPANY_TERM",
 }
 
-_SUPPORTED_PHONE_REGIONS = ("US", "CA", "GB")
 
 
 def _offline_email_recognizer() -> EmailRecognizer:
@@ -66,9 +73,7 @@ class Detector:
             CreditCardRecognizer(patterns=CreditCardRecognizer.PATTERNS + [MASTERCARD_2_SERIES]),
             _offline_email_recognizer(),
             IbanRecognizer(supported_entity="IBAN"),  # mod-97 checked
-            PhoneRecognizer(
-                supported_entity="PHONE", supported_regions=_SUPPORTED_PHONE_REGIONS, leniency=0
-            ),
+            PhonePatternRecognizer(),
             UsSsnRecognizer(),  # already named US_SSN
             UkNinoRecognizer(),  # already named UK_NINO; prefix rules built in
             CaSinRecognizer(),
@@ -89,7 +94,25 @@ class Detector:
 
     def detect(self, text: str) -> list[Span]:
         results = self._analyzer.analyze(text=text, language="en")
-        return [_to_span(result) for result in results]
+        return [_with_context(_to_span(result), text) for result in results]
+
+
+# A cue word just before a weak match makes it a confident one. Presidio's own enhancer
+# compares single lemmas (so "date of birth" never matches) and adds only 0.35, which
+# leaves a 0.15 date below every dial threshold even when it is labelled as a birth date.
+_CONTEXT = {
+    "DATE_OF_BIRTH": re.compile(r"\b(born|dob|d\.o\.b|birth\s*date|date\s+of\s+birth|birthday)\b", re.I),
+    "PASSPORT": re.compile(r"\bpassport\b", re.I),
+    "PHONE": re.compile(r"\b(phone|tel|telephone|mobile|cell|call|fax|contacts?|reach|text|sms|number)\b", re.I),
+}
+CONTEXT_WINDOW, CONTEXT_SCORE = 80, 0.85
+
+
+def _with_context(span: Span, text: str) -> Span:
+    cue = _CONTEXT.get(span.entity_type)
+    if cue and span.score < CONTEXT_SCORE and cue.search(text[max(0, span.start - CONTEXT_WINDOW): span.start]):
+        return replace(span, score=CONTEXT_SCORE, detector=span.detector + ".context")
+    return span
 
 
 def _to_span(result: RecognizerResult) -> Span:
