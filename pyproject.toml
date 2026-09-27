@@ -1,0 +1,26 @@
+[project]
+name = "redactit"
+version = "0.1.0"
+description = "Local-first redaction of sensitive data before it reaches an LLM."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.13"
+# Engine dependencies are added alongside the code that uses them.
+dependencies = []
+
+[project.scripts]
+redactit = "redactit.cli:main"
+
+[dependency-groups]
+dev = ["pytest==9.1.1", "pytest-socket==0.8.1"]
+# Builds the synthetic test corpus. Never shipped.
+corpus = ["Faker==40.39.0", "reportlab==5.0.1", "Pillow==12.3.0", "zxing-cpp==3.1.1"]
+# Re-extracts redacted outputs for the leak test. Never shipped.
+leak = ["pypdfium2==5.13.0", "rapidocr-onnxruntime==1.4.4", "Pillow==12.3.0", "zxing-cpp==3.1.1"]
+
+[tool.uv]
+default-groups = ["dev", "corpus", "leak"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
