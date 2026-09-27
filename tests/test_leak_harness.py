@@ -37,3 +37,23 @@ def test_output_type_comes_from_content_not_suffix(tmp_path):
     (tmp_path / "b.bin").write_bytes(b"\x00\x01 not a known format")
     with pytest.raises(ValueError, match="unrecognised output type"):
         leak.extract(tmp_path / "b.bin")
+
+
+def test_zip_members_are_extracted_not_skipped(tmp_path):
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("notes/readme.md", "call Priya Okafor")
+        z.writestr("blob.bin", b"\x00\x01 opaque")
+    (tmp_path / "a.zip").write_bytes(buf.getvalue())
+    with pytest.raises(ValueError, match="blob.bin: unrecognised output type"):
+        leak.extract(tmp_path / "a.zip")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("notes/readme.md", "call Priya Okafor")
+    (tmp_path / "b.zip").write_bytes(buf.getvalue())
+    sources, _ = leak.extract(tmp_path / "b.zip")
+    assert "Priya Okafor" in sources["notes/readme.md/text"]

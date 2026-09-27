@@ -117,30 +117,46 @@ def survives(value: str, source: str, hay: str) -> bool:
     return fuzzy_contains(needle, hay)
 
 
+def found_in(entity_type: str, value: str, compact: dict[str, str], spaced: dict[str, str]) -> list[str]:
+    """Sources where the whole value (fuzzy) or an identifying part (whole word) survives.
+
+    Parts are never matched against raw bytes: short names like "Page" or "Max" occur by
+    chance in binary data ("/Type /Page" is in every PDF), which would fail a correct redactor.
+    """
+    hits = [src for src, hay in compact.items() if survives(value, src, hay)]
+    return hits + [
+        f"{src} (part: {p})"
+        for p in parts(entity_type, value)
+        for src, hay in spaced.items()
+        if not src.endswith(("/bytes", ":bytes")) and words(p) in hay
+    ]
+
+
 # --- extractors -----------------------------------------------------------------------
 
 def extract(path: Path) -> tuple[dict[str, str], list[str]]:
-    """Return ({source_name: text}, [metadata problems]) for one output file.
+    """Return ({source_name: text}, [metadata problems]) for one output file."""
+    problems: list[str] = []
+    return _extract(path.read_bytes(), path.name, problems), problems
 
-    The file type is sniffed from its content, not trusted from its suffix: an image saved
-    as .webp must still be OCR'd, and an unknown type is an error, never "plain text".
-    """
-    data = path.read_bytes()
+
+def _extract(data: bytes, name: str, problems: list[str]) -> dict[str, str]:
+    """Sniff the type from content, not the suffix: an image saved as .webp must still be
+    OCR'd, and an unknown type is an error, never "plain text"."""
     # Raw bytes catch metadata and uncompressed streams no parser was asked about.
     sources = {"bytes": data.decode("latin-1") + data.decode("utf-16-le", "ignore")}
-    problems: list[str] = []
     if data.startswith(b"%PDF"):
         sources.update(_pdf_text(data, problems))
     elif zipfile.is_zipfile(io.BytesIO(data)):
-        sources["ooxml"] = _ooxml_text(data)
+        sources.update(_zip_text(data, problems))
     elif (img := _open_image(data)) is not None:
         with img:
             sources.update(_image_text(img, problems))
-    elif path.suffix.lower() in TEXT_SUFFIXES:
+    elif Path(name).suffix.lower() in TEXT_SUFFIXES:
         sources["text"] = data.decode("utf-8", "replace")
     else:
-        raise ValueError(f"{path}: unrecognised output type; refusing to score it as text")
-    return sources, problems
+        raise ValueError(f"{name}: unrecognised output type; refusing to score it as text")
+    return sources
 
 
 def _open_image(data: bytes):
@@ -152,16 +168,22 @@ def _open_image(data: bytes):
         return None
 
 
-def _ooxml_text(data: bytes) -> str:
-    """Text nodes plus attribute values: comment and revision authors live in attributes."""
-    parts_ = []
+def _zip_text(data: bytes, problems: list[str]) -> dict[str, str]:
+    """XML parts as text plus attribute values (comment and revision authors live in
+    attributes); every other member is extracted recursively, so an image zipped up is
+    still OCR'd rather than skipped."""
+    sources, xml_parts = {}, []
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         for name in z.namelist():
+            member = z.read(name)
             if name.endswith((".xml", ".rels")):
-                xml = z.read(name).decode("utf-8", "replace")
-                parts_.append(re.sub(r"<[^>]+>", "", xml))  # adjacent runs join up
-                parts_.extend(re.findall(r'="([^"]*)"', xml))
-    return " ".join(parts_)
+                xml = member.decode("utf-8", "replace")
+                xml_parts.append(re.sub(r"<[^>]+>", "", xml))  # adjacent runs join up
+                xml_parts.extend(re.findall(r'="([^"]*)"', xml))
+            elif not name.endswith("/"):
+                sources.update({f"{name}/{k}": v for k, v in _extract(member, name, problems).items()})
+    sources["ooxml"] = " ".join(xml_parts)
+    return sources
 
 
 def _pdf_text(data: bytes, problems: list[str]) -> dict[str, str]:
@@ -249,16 +271,9 @@ def run(corpus: Path, outputs: Path, spans_file: Path | None, formats: set[str] 
         for s in doc["seeded"]:
             key = (doc["format"], s["entity_type"])
             per[key]["seeded"] += 1
-            hits = [src for src, hay in compact.items() if survives(s["value"], src, hay)]
-            part_hits = [
-                f"{src} (part: {p})"
-                for p in parts(s["entity_type"], s["value"])
-                for src, hay in spaced.items()
-                if words(p) in hay
-            ]
-            if hits or part_hits or not outs:
-                found = hits + part_hits or ["<no output>"]
-                survivors.append({**s, "file": doc["file"], "found_in": found})
+            hits = found_in(s["entity_type"], s["value"], compact, spaced)
+            if hits or not outs:
+                survivors.append({**s, "file": doc["file"], "found_in": hits or ["<no output>"]})
             else:
                 per[key]["removed"] += 1
     return {

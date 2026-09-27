@@ -9,9 +9,7 @@ import run as leak
 
 
 def survives(entity_type: str, value: str, text: str, source: str = "out.md:text") -> bool:
-    """Mirror run(): the whole value (fuzzy), or any identifying part (whole word)."""
-    whole = leak.survives(value, source, leak.normalize(text))
-    return whole or any(leak.words(p) in leak.words(text) for p in leak.parts(entity_type, value))
+    return bool(leak.found_in(entity_type, value, {source: leak.normalize(text)}, {source: leak.words(text)}))
 
 
 @pytest.mark.parametrize(
@@ -51,3 +49,9 @@ def test_ocr_gets_more_edits_and_folds_look_alikes():
 )
 def test_not_a_leak(entity_type, value, text):
     assert not survives(entity_type, value, text)
+
+
+def test_name_parts_are_not_matched_in_raw_bytes():
+    """Every PDF contains "/Type /Page", so a person named Page must not always survive."""
+    assert not survives("PERSON", "Jordan Page", "%PDF-1.7 /Type /Page", source="out.pdf:bytes")
+    assert survives("PERSON", "Jordan Page", "Signed, [PERSON_1] Page", source="out.pdf:pdf_ocr")
