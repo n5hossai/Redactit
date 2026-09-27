@@ -71,8 +71,8 @@ flowchart LR
 | T7 | Upload proceeds while the engine is down | B1/B2 | Fail closed: disconnect, timeout or error blocks the upload | Extension test with the host stopped (Phase 5) |
 | T8 | Another extension or process drives the native host | B2 | `allowed_origins` with one fixed ID; host also checks the origin argument Chrome passes | Installer test (Phase 4) |
 | T9 | Oversized or malformed native messages crash the host or truncate data | B2 | Length-prefixed frames, 512 KiB chunks, strict JSON schema, size caps | Host unit tests (Phase 4) |
-| T10 | Raw values end up in logs, exceptions or the audit file | B3 | Audit stores types, counts, rule IDs and scores only; logging filter; sanitised exception type | Leak test scans logs and audit file |
-| T11 | Temp files are left behind or readable by others | B3 | Private dir (0700 or user-only ACL), deleted in `finally`; memory by default | Test that the temp dir is empty after each run |
+| T10 | Raw values end up in logs, exceptions or the audit file | B3 | Audit stores types, counts, rule IDs and scores only; logging filter; sanitised exception type | Leak test scans logs and audit file (Phase 2) |
+| T11 | Temp files are left behind or readable by others | B3 | Private dir (0700 or user-only ACL), deleted in `finally`; memory by default | Test that the temp dir is empty after each run (Phase 2) |
 | T12 | Vault read from disk | B3 | AES-256-GCM, key in OS keychain, 30-day purge | Vault unit tests (Phase 2) |
 | T13 | User weakens the policy | Engine | Managed layer, tighten-only merge, locked types | Policy merge tests (Phase 2) |
 | T14 | Engine phones home or downloads at runtime | B4 | No network code; Hugging Face offline flags set at startup; sockets disabled in tests | `tests/test_offline.py` |

@@ -88,6 +88,8 @@ Runtime dependencies must be MIT, Apache-2.0 or BSD. Exceptions are listed in se
 | Folder watcher | `watchdog` | Apache-2.0 | Cross-platform file events. |
 | Clipboard | `ctypes` (Windows), `pyobjc` (macOS), `wl-paste`/`xclip` (Linux) | PSF / MIT / external process | Reads the "concealed" markers that password managers set. |
 | Tests | `pytest`, `pytest-socket`, `Faker` | MIT | `pytest-socket` makes any network call fail the test. |
+| Test corpus | `reportlab` (digital PDFs), `pypdfium2`, `rapidocr-onnxruntime`, `zxing-cpp` | BSD / Apache-2.0 | Builds and re-extracts the synthetic corpus. Test-only. |
+| Build backend | `hatchling` | MIT | Standard PEP 517 backend for `uv`. |
 | Extension | MV3, plain JavaScript + JSDoc, no build step | n/a | What Chrome loads is exactly what is reviewed. |
 
 ### 3.1 NER choice: Presidio + GLiNER
@@ -162,13 +164,16 @@ Redactit/
 │  ├─ install.sh             # macOS + Linux
 │  └─ host-manifest.json     # template; allowed_origins = our extension ID only
 ├─ tests/
-│  ├─ corpus/generate.py     # seeded Faker corpus in every format
+│  ├─ corpus/                # generate.py + corpus_docx.py, corpus_media.py: seeded corpus
 │  ├─ leak/run.py            # re-extract, re-OCR, score, write report
 │  ├─ unit/                  # per module
-│  └─ test_offline.py        # engine run with sockets disabled
+│  ├─ test_offline.py        # engine run with sockets disabled
+│  ├─ test_licenses.py       # fails on any non-permissive dependency
+│  └─ test_leak_harness.py   # harness must see every value on unredacted input
 ├─ docs/
 │  ├─ PLAN.md
-│  └─ THREAT_MODEL.md
+│  ├─ THREAT_MODEL.md
+│  └─ leak-reports/          # full leak report per phase
 └─ .github/
    ├─ workflows/ci.yml       # Win/macOS/Linux: unit + text leak test + license check
    └─ pull_request_template.md
@@ -247,9 +252,14 @@ are committed.
 | Pillow | MIT-CMU (historical PIL license) | Permissive, MIT-equivalent terms; the only mature raster PDF writer without LGPL |
 | defusedxml | PSF-2.0 | Permissive; the standard defence against XML entity attacks in untrusted DOCX |
 | torch (only if option (a) in 3.1 is chosen) | BSD-3 plus bundled libraries | Bundled Intel MKL license is **unverified**; must be checked before it is accepted |
+| OpenCV wheels (runtime from Phase 3: RapidOCR, YuNet) | Apache-2.0, but every wheel bundles FFmpeg (LGPL-2.1) as a separate DLL | **Open decision for Phase 3.** LGPL permits unmodified dynamic use. The alternative is building OpenCV without video I/O. |
+
+Test-only exceptions (never shipped), enforced in `tests/test_licenses.py`: numpy
+(BSD/MIT/Zlib/CC0 plus the GCC runtime exception), tqdm (MPL-2.0 AND MIT), opencv-python
+(bundled FFmpeg, LGPL), shapely (bundled GEOS, LGPL). All arrive via `rapidocr-onnxruntime`.
 
 Excluded after checking: PyMuPDF and Ghostscript (AGPL), `img2pdf` (LGPL-3), `python-stdnum`
-(LGPL-2.1+), `zbar` behind `pyzbar` (LGPL-2.1), PyAV/FFmpeg (LGPL, removed with audio).
+(LGPL-2.1+), `zbar` behind `pyzbar` (LGPL-2.1), PyAV (removed with audio).
 Linux clipboard access calls `wl-paste`/`xclip` as external processes; they are not
 linked into Redactit.
 
