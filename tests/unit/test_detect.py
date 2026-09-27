@@ -320,3 +320,12 @@ def test_a_date_is_a_confident_birth_date_only_after_a_cue(det):
     bare = _spans_of(det, "The meeting moved to 1965-03-11.", "DATE_OF_BIRTH")
     assert max(s.score for s in cued) >= 0.85
     assert all(s.score < 0.35 for s in bare)
+
+
+@pytest.mark.parametrize(
+    "addr", ["USNV Jackson, FPO AE 65210", "USS Miller\nFPO AP 34321", "PSC 1234, Box 5678, APO AA 12345",
+             "Unit 4321 Box 8765, DPO AE 09876"],
+)
+def test_military_addresses_are_whole_address_spans(det, addr):
+    text = f"Ship to {addr} by Friday."
+    assert any(text[s.start:s.end] == addr for s in _spans_of(det, text, "ADDRESS"))

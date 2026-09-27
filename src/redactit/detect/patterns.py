@@ -129,3 +129,23 @@ class PhonePatternRecognizer(PatternRecognizer):
 
     def __init__(self) -> None:
         super().__init__(supported_entity="PHONE", patterns=self.PATTERNS, global_regex_flags=re.IGNORECASE)
+
+
+class MilitaryAddressRecognizer(PatternRecognizer):
+    """US military mail addresses (ship, PSC box or unit, then APO/FPO/DPO + AA/AE/AP + ZIP).
+
+    The name model does not read "USNV Jackson, FPO AE 65210" as an address, and the shape
+    is fixed by the postal service, so a pattern is both shorter and certain.
+    """
+
+    PATTERNS = [
+        Pattern(
+            "Military address",
+            r"\b(?:(?:USNS|USNV|USS|USCGC)\s+[A-Z][\w'-]*(?:\s[A-Z][\w'-]*)?|PSC\s+\d{4},?\s+Box\s+\d{4}"
+            r"|Unit\s+\d{4},?\s+Box\s+\d{4})[,\n]\s*(?:APO|FPO|DPO)\s+(?:AA|AE|AP)\s+\d{5}\b",
+            0.9,
+        ),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__(supported_entity="ADDRESS", patterns=self.PATTERNS)

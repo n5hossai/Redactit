@@ -23,6 +23,7 @@ from .patterns import (
     MASTERCARD_2_SERIES,
     CaSinRecognizer,
     DateOfBirthRecognizer,
+    MilitaryAddressRecognizer,
     PassportRecognizer,
     PhonePatternRecognizer,
 )
@@ -74,6 +75,7 @@ class Detector:
             _offline_email_recognizer(),
             IbanRecognizer(supported_entity="IBAN"),  # mod-97 checked
             PhonePatternRecognizer(),
+            MilitaryAddressRecognizer(),  # the name model misses this fixed postal shape
             UsSsnRecognizer(),  # already named US_SSN
             UkNinoRecognizer(),  # already named UK_NINO; prefix rules built in
             CaSinRecognizer(),
