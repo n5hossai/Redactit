@@ -24,6 +24,7 @@ from faker import Faker
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from corpus_docx import DOCX_VARIANTS, build_docx
+from corpus_media import PDF_VARIANTS, build_image, build_pdf
 
 LOCALES = ["en_US", "en_CA", "en_GB"]
 
@@ -278,9 +279,13 @@ def build_md(vf: ValueFactory, path: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 # (format, variant, extension, builder(vf, path) -> entries)
-_PLAN = [("txt", "plain", "txt", build_txt), ("md", "plain", "md", build_md)] + [
-    ("docx", v, "docx", lambda vf, path, v=v: build_docx(v, vf, path)) for v in DOCX_VARIANTS
-]
+_PLAN = (
+    [("txt", "plain", "txt", build_txt), ("md", "plain", "md", build_md)]
+    + [("docx", v, "docx", lambda vf, path, v=v: build_docx(v, vf, path)) for v in DOCX_VARIANTS]
+    + [("pdf", v, "pdf", lambda vf, path, v=v: build_pdf(v, vf, path)) for v in PDF_VARIANTS]
+    + [("png", "plain", "png", lambda vf, path: build_image("png", vf, path))]
+    + [("jpg", "plain", "jpg", lambda vf, path: build_image("jpg", vf, path))]
+)
 
 
 def generate(seed: int, out: Path, per_variant: int) -> dict:
