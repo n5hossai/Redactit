@@ -111,6 +111,15 @@ class Vault:
         nonce, ct = row[0][:12], row[0][12:]
         return AESGCM(self._key).decrypt(nonce, ct, None).decode("utf-8")
 
+    def close(self) -> None:
+        self._conn.close()
+
+    def __enter__(self) -> "Vault":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
     def purge(self, retention_days: int, now: float | datetime | None = None) -> int:
         """Delete entries older than `retention_days`; returns the number removed."""
         if now is None:
