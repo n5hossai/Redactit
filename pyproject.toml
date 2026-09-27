@@ -21,6 +21,12 @@ leak = ["pypdfium2==5.13.0", "rapidocr-onnxruntime==1.4.4", "Pillow==12.3.0", "z
 [tool.uv]
 default-groups = ["dev", "corpus", "leak"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The engine must never make a network call; --disable-socket makes any
+# attempt fail the test instead of leaking data silently.
+addopts = "--disable-socket"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
