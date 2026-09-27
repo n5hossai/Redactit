@@ -255,6 +255,10 @@ are committed.
 | pypdfium2 | BSD-3 / Apache-2.0; bundled PDFium notices mention GPL | Mentions are ICU's autoconf macros (GPL with the Autoconf exception, build scripts only) and the LLVM exception clause; no copyleft code in the binary |
 | OpenCV wheels (runtime from Phase 3: RapidOCR, YuNet) | Apache-2.0, but every wheel bundles FFmpeg (LGPL-2.1) as a separate DLL | **Open decision for Phase 3.** LGPL permits unmodified dynamic use. The alternative is building OpenCV without video I/O. |
 
+Runtime exceptions accepted by the owner (used unmodified; obligations attach only to
+changes in their own files): certifi (MPL-2.0, via requests/httpx), setuptools (MIT, vendoring
+LGPL-3 and MPL-2.0 files, required by spaCy), typing-extensions (PSF-2.0).
+
 Test-only exceptions (never shipped), enforced in `tests/test_licenses.py`: numpy
 (BSD/MIT/Zlib/CC0 plus the GCC runtime exception), tqdm (MPL-2.0 AND MIT), opencv-python
 (bundled FFmpeg, LGPL), shapely (bundled GEOS, LGPL). All arrive via `rapidocr-onnxruntime`.

@@ -6,7 +6,17 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12,<3.13"
 # Engine dependencies are added alongside the code that uses them.
-dependencies = []
+dependencies = [
+    "cryptography==50.0.1",
+    "keyring==25.7.0",
+    "onnxruntime==1.30.0",
+    "platformdirs==4.12.0",
+    "presidio-analyzer==2.2.364",
+    "pydantic==2.13.5",
+    "pyyaml==6.0.3",
+    "spacy==3.8.16",
+    "tokenizers==0.23.2",
+]
 
 [project.scripts]
 redactit = "redactit.cli:main"
