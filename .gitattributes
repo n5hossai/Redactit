@@ -1,0 +1,8 @@
+# Normalise text to LF in the repo; PowerShell scripts keep CRLF for Windows.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.docx binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.onnx binary
