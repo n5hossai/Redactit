@@ -125,3 +125,20 @@ def test_open_fails_closed_with_no_usable_backend(tmp_path, restore_keyring):
     keyring.set_keyring(_BrokenBackend())
     with pytest.raises(RuntimeError):
         Vault.open(tmp_path / "vault.db")
+
+
+def test_hidden_characters_do_not_split_one_person_into_two(tmp_path):
+    v = Vault(tmp_path / "v.db", KEY)
+    assert v.number_for("chat", "PERSON", "Pri­ya Okafor") == v.number_for("chat", "PERSON", "Priya​ Okafor")
+
+
+def test_a_ciphertext_moved_to_another_row_fails_to_decrypt(tmp_path):
+    from cryptography.exceptions import InvalidTag
+
+    v = Vault(tmp_path / "v.db", KEY)
+    v.number_for("chat", "PERSON", "Priya Okafor")
+    v.number_for("chat", "PERSON", "Dmitri Volkov")
+    first = v._conn.execute("SELECT ciphertext FROM entries WHERE n=1").fetchone()[0]
+    v._conn.execute("UPDATE entries SET ciphertext=? WHERE n=2", (first,))
+    with pytest.raises(InvalidTag):
+        v.value_for("chat", "PERSON", 2)
