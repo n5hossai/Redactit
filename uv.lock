@@ -223,6 +223,14 @@ wheels = [
 ]
 
 [[package]]
+name = "en-core-web-sm"
+version = "3.8.0"
+source = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
+wheels = [
+    { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl", hash = "sha256:1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85" },
+]
+
+[[package]]
 name = "faker"
 version = "40.39.0"
 source = { registry = "https://pypi.org/simple" }
@@ -836,6 +844,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
+    { name = "en-core-web-sm" },
     { name = "keyring" },
     { name = "onnxruntime" },
     { name = "platformdirs" },
@@ -863,6 +872,7 @@ leak = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = "==50.0.1" },
+    { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "keyring", specifier = "==25.7.0" },
     { name = "onnxruntime", specifier = "==1.30.0" },
     { name = "platformdirs", specifier = "==4.12.0" },
