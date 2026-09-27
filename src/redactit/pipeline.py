@@ -10,7 +10,7 @@ from redactit.detect.ner import GlinerNer
 from redactit.detect.registry import Detector
 from redactit.policy import Policy
 from redactit.pseudonym import Pseudonymizer, apply
-from redactit.types import Decision
+from redactit.types import Decision, Span
 from redactit.vault import Vault
 
 
@@ -42,7 +42,7 @@ class Engine:
                site: str | None = None) -> Result:
         """`scope` keeps pseudonyms consistent: one chat, one folder run, one CLI call."""
         clean, where = _canonical(text)
-        spans = self.detector.detect(clean) + self.ner.detect(clean)
+        spans = _join_address_fragments(clean, self.detector.detect(clean) + self.ner.detect(clean))
         decisions = [_to_source(d, where) for d in self.policy.decide(clean, spans, site)]
         result = Result(apply(text, decisions, Pseudonymizer(self.vault, scope)), decisions)
         if self.audit:
@@ -72,6 +72,26 @@ def _canonical(text: str) -> tuple[str, list[int]]:
             out.append(c)
             where.append(i)
     return "".join(out), where
+
+
+ADDRESS_GAP = 40  # characters between two address fragments that still make one address
+
+
+def _join_address_fragments(text: str, spans: list[Span]) -> list[Span]:
+    """Add one span covering address fragments that sit close together on one line.
+
+    A street pattern and a postcode pattern once matched both ends of "4351 Betty Grove
+    Apt. 571, South Jasonport, YT K6X 5C8" and the middle survived; the policy merges the
+    joined span with its parts. Two addresses on one line get joined too, over-redacting
+    the words between them, which is the safe side.
+    """
+    parts = sorted((s for s in spans if s.entity_type == "ADDRESS"), key=lambda s: s.start)
+    joined = [
+        replace(a, end=b.end, score=max(a.score, b.score), detector="address.join", validated=False)
+        for a, b in zip(parts, parts[1:])
+        if 0 < b.start - a.end <= ADDRESS_GAP and "\n" not in text[a.end:b.start]
+    ]
+    return spans + joined
 
 
 def _to_source(d: Decision, where: list[int]) -> Decision:

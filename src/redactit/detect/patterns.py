@@ -136,7 +136,8 @@ _STREET_TYPE = (r"(?:Street|St|Road|Rd|Lane|Ln|Avenue|Ave|Boulevard|Blvd|Drive|D
                 r"|Square|Sq|Crescent|Cres|Terrace|Close|Parkway|Pkwy|Highway|Hwy|Row|Walk|Gardens|Grove"
                 r"|Mews|Circle|Cir|Trail|Park|Hill|Green)")
 _UNIT = r"(?:(?:Flat|Apt\.?|Apartment|Unit|Suite)\s*[\w-]+,?\s+)?"
-_TAIL = r"(?:,[^\S\n]*[^,\n.;:!?]{2,40}){0,4}"
+_UNIT_AFTER = r"(?:,?[^\S\n]*(?:Apt|Apartment|Suite|Ste|Unit|Flat|#)\.?[^\S\n]*[\w-]+)?"
+_TAIL = _UNIT_AFTER + r"(?:,[^\S\n]*[^,\n.;:!?]{2,40}){0,4}"
 ADDRESS = _recognizer("ADDRESS", [
     Pattern("Street, number first",
             rf"\b{_UNIT}\d{{1,5}}[A-Za-z]?,?\s+(?:[A-Z][\w'-]*\s+){{0,4}}{_STREET_TYPE}\b\.?{_TAIL}", 0.75),
