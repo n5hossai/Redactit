@@ -69,7 +69,8 @@ class Detector:
 
     def detect(self, text: str) -> list[Span]:
         results = self._analyzer.analyze(text=text, language="en")
-        return [_with_context(_to_span(result), text) for result in results]
+        headers = _Headers(text)
+        return [_with_context(_to_span(result), text, headers) for result in results]
 
 
 # A cue word just before a weak match, or in its Markdown table column's header, makes it a
@@ -79,36 +80,57 @@ _CONTEXT = {
     "DATE_OF_BIRTH": re.compile(r"\b(born|dob|d\.o\.b|birth\s*date|date\s+of\s+birth|birthday)\b", re.I),
     "PASSPORT": re.compile(r"\bpassport\b", re.I),
     "PHONE": re.compile(r"\b(phone|tel|telephone|mobile|cell|call|fax|contacts?|reach|text|sms|number)\b", re.I),
-    "US_SSN": re.compile(r"\b(ssn|social\s+security)\b", re.I),
+    "US_SSN": re.compile(r"\b(ssn|ss\s*(?:no|#|number)|soc(?:ial)?\.?\s*sec(?:urity)?)\b", re.I),
     # No word boundaries: the cue usually sits inside an identifier (aws_secret_access_key).
     "API_KEY": re.compile(r"secret|password|passwd|token|api_?key", re.I),
 }
 CONTEXT_WINDOW, CONTEXT_SCORE = 80, 0.85
 
 
-def _with_context(span: Span, text: str) -> Span:
+def _with_context(span: Span, text: str, headers: "_Headers") -> Span:
     cue = _CONTEXT.get(span.entity_type)
     if cue and span.score < CONTEXT_SCORE and (
-        cue.search(text[max(0, span.start - CONTEXT_WINDOW):span.start]) or cue.search(_column_header(text, span.start))
+        cue.search(text[max(0, span.start - CONTEXT_WINDOW):span.start]) or cue.search(headers.column(span.start))
     ):
         return replace(span, score=CONTEXT_SCORE, detector=span.detector + ".context")
     return span
 
 
-def _column_header(text: str, pos: int) -> str:
-    """The header cell above `pos` when it sits in a Markdown table row, else ""."""
-    row_start = text.rfind("\n", 0, pos) + 1
-    rows = text[:row_start].split("\n")[:-1]
-    if not text[row_start:pos].lstrip().startswith("|"):
-        return ""
-    header = text[row_start:text.find("\n", pos) if "\n" in text[pos:] else len(text)]
-    for row in reversed(rows):  # walk up to the table's first row
-        if not row.lstrip().startswith("|"):
-            break
-        header = row
-    column = text.count("|", row_start, pos)
-    cells = header.split("|")
-    return cells[column] if column < len(cells) else ""
+class _Headers:
+    """Header cells of Markdown tables, with or without leading pipes, looked up per match.
+
+    Each row's table header is memoised, so a table is walked once however many matches it
+    holds: re-scanning the text above every match once cost 2.3 s on a 500 KB log.
+    """
+
+    def __init__(self, text: str) -> None:
+        self.text, self._first_row = text, {}
+
+    def column(self, pos: int) -> str:
+        """The header cell of the column `pos` sits in, or "" outside a table."""
+        start = self.text.rfind("\n", 0, pos) + 1
+        if "|" not in self._line(start):
+            return ""
+        column = self.text[start:pos].strip().lstrip("|").count("|")
+        cells = self._line(self._header_start(start)).strip().strip("|").split("|")
+        return cells[column] if column < len(cells) else ""
+
+    def _line(self, start: int) -> str:
+        end = self.text.find("\n", start)
+        return self.text[start:] if end == -1 else self.text[start:end]
+
+    def _header_start(self, start: int) -> str:
+        walked = []
+        while start not in self._first_row:  # walk up while the line above is a table row
+            walked.append(start)
+            above = self.text.rfind("\n", 0, start - 1) + 1 if start else start
+            if start == 0 or "|" not in self._line(above):
+                self._first_row[start] = start
+                break
+            start = above
+        for row in walked:
+            self._first_row[row] = self._first_row[start]
+        return self._first_row[start]
 
 
 def _to_span(result: RecognizerResult) -> Span:

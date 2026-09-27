@@ -37,7 +37,9 @@ MASTERCARD_2_SERIES = Pattern(
 
 
 def _recognizer(entity: str, patterns: list[Pattern], flags=re.MULTILINE) -> PatternRecognizer:
-    return PatternRecognizer(supported_entity=entity, patterns=patterns, global_regex_flags=flags)
+    # A distinct name per entity, so the audit log can tell which recogniser fired.
+    return PatternRecognizer(supported_entity=entity, patterns=patterns, global_regex_flags=flags,
+                             name=f"{entity.lower()}_pattern")
 
 
 class CaSinRecognizer(PatternRecognizer):
@@ -66,7 +68,9 @@ class UsSsnRecognizer(PatternRecognizer):
 
     PATTERNS = [
         Pattern("SSN separated", r"\b\d{3}[\s.-]\d{2}[\s.-]\d{4}\b", 0.6),
-        Pattern("SSN bare", r"\b\d{9}\b", 0.2),
+        # 0.35 clears the locked-type threshold: an unlabelled 9-digit run is masked, since
+        # it may be an SSN, passport or account number and over-redaction is the safe side.
+        Pattern("SSN bare", r"\b\d{9}\b", 0.35),
     ]
 
     def __init__(self) -> None:
@@ -89,7 +93,7 @@ UK_NINO = _recognizer("UK_NINO", [Pattern(
 # the lettered form scores above zero on its own; the "passport" cue does the rest.
 PASSPORT = _recognizer("PASSPORT", [
     Pattern("Passport lettered", r"\b[A-Z]{1,2}[\s-]?\d{6,8}\b", 0.35),
-    Pattern("Passport bare digits", r"\b\d{9}\b", 0.05),
+    Pattern("Passport bare digits", r"\b\d{9}\b", 0.35),  # same reasoning as a bare SSN
 ], re.MULTILINE | re.IGNORECASE)
 
 # Most dates are not birth dates, so every format starts low; a "born"/"DOB" cue or a DOB
@@ -104,7 +108,8 @@ DATE_OF_BIRTH = _recognizer("DATE_OF_BIRTH", [
 # Our own email pattern: Presidio's checks the domain against the public suffix list, so
 # addresses on internal domains (corp.local, acme.internal) scored 0 and survived.
 EMAIL = _recognizer("EMAIL", [Pattern(
-    "Email", r"(?<![\w.+-])[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?![\w-])", 0.95,
+    # \w in domain labels too: internationalised domains (müller-bau.de) are still addresses.
+    "Email", r"(?<![\w.+-])[\w.%+-]+@[\w-]+(?:\.[\w-]+)+(?![\w-])", 0.95,
 )])
 
 # Phones by shape: an optional country/trunk prefix, an area code in brackets or followed
@@ -138,6 +143,7 @@ _STREET_TYPE = (r"(?:Street|St|Road|Rd|Lane|Ln|Avenue|Ave|Boulevard|Blvd|Drive|D
 _UNIT = r"(?:(?:Flat|Apt\.?|Apartment|Unit|Suite)\s*[\w-]+,?\s+)?"
 _UNIT_AFTER = r"(?:,?[^\S\n]*(?:Apt|Apartment|Suite|Ste|Unit|Flat|#)\.?[^\S\n]*[\w-]+)?"
 _TAIL = _UNIT_AFTER + r"(?:,[^\S\n]*[^,\n.;:!?]{2,40}){0,4}"
+_BEFORE = r"(?:[^,\n.;:!?|]{2,40},[^\S\n]*){0,3}(?:[^,\n.;:!?|]{0,30}[^\S\n])?"
 ADDRESS = _recognizer("ADDRESS", [
     Pattern("Street, number first",
             rf"\b{_UNIT}\d{{1,5}}[A-Za-z]?,?\s+(?:[A-Z][\w'-]*\s+){{0,4}}{_STREET_TYPE}\b\.?{_TAIL}", 0.75),
@@ -148,7 +154,10 @@ ADDRESS = _recognizer("ADDRESS", [
     Pattern("Military address",
             r"\b(?:(?:USNS|USNV|USS|USCGC)\s+[A-Z][\w'-]*(?:\s[A-Z][\w'-]*)?|PSC\s+\d{4},?\s+Box\s+\d{4}"
             r"|Unit\s+\d{4},?\s+Box\s+\d{4})[,\n]\s*(?:APO|FPO|DPO)\s+(?:AA|AE|AP)\s+\d{5}\b", 0.9),
-    # Postcodes on their own: enough to locate a person to a street in the UK and Canada.
-    Pattern("UK postcode", r"\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[ABD-HJLNP-UW-Z]{2}\b", 0.55),
-    Pattern("CA postal code", r"\b[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\s?\d[ABCEGHJ-NPRSTV-Z]\d\b", 0.55),
+    Pattern("PO box", rf"\b(?:P\.?\s?O\.?\s?Box|Post\s+Office\s+Box)\s+\d+{_TAIL}", 0.75),
+    Pattern("Numbered unit", rf"\b(?:Unit|Suite|Flat|Apartment)\s+\d+[A-Za-z]?{_TAIL}", 0.6),
+    # A postcode locates a person to a street in the UK and Canada, so it is redacted with
+    # up to three comma-separated parts before it (building, street, town) on its line.
+    Pattern("UK postcode", _BEFORE + r"\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[ABD-HJLNP-UW-Z]{2}\b", 0.55),
+    Pattern("CA postal code", _BEFORE + r"\b[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\s?\d[ABCEGHJ-NPRSTV-Z]\d\b", 0.55),
 ])

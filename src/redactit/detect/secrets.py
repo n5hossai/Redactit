@@ -35,5 +35,5 @@ class ApiKeyRecognizer(PatternRecognizer):
     """Vendor tokens, JWTs, AWS keys and whole private-key blocks, all as API_KEY."""
 
     def __init__(self) -> None:
-        # DOTALL so a key block spans lines; lazy .*? stops at the first END or blank line.
+        # DOTALL so a key block spans lines; lazy .*? stops at the first END line or the end.
         super().__init__(supported_entity="API_KEY", patterns=PATTERNS, global_regex_flags=re.MULTILINE | re.DOTALL)

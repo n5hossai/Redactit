@@ -412,3 +412,36 @@ def test_private_key_blocks_including_headers_and_truncation(det, block):
 ])
 def test_id_formats_with_other_case_and_separators(det, text, value, entity):
     assert _covers(_spans_of(det, text, entity), text, value)
+
+
+# --- Round-two review cases. ---------------------------------------------------------------
+
+def test_birth_dates_in_a_table_without_leading_pipes(det):
+    text = "Name | DOB | City\n--- | --- | ---\nDmitri Volkov | 1979-11-02 | Leeds\nAnn Lee | 1980-01-03 | York\n"
+    confident = {text[s.start:s.end] for s in _spans_of(det, text, "DATE_OF_BIRTH") if s.score >= 0.85}
+    assert confident == {"1979-11-02", "1980-01-03"}
+
+
+def test_bare_nine_digit_ids_are_masked_with_or_without_a_cue(det):
+    for text in ("Employee 4471, SS no. 219099999, starts Monday.", "Reference 219099999 on file."):
+        spans = det.detect(text)
+        assert any(text[s.start:s.end] == "219099999" and s.score >= 0.35 for s in spans), text
+
+
+def test_email_on_an_internationalised_domain(det):
+    text = "Write to priya.okafor@müller-bau.de today."
+    assert _covers(_spans_of(det, text, "EMAIL"), text, "priya.okafor@müller-bau.de")
+
+
+@pytest.mark.parametrize("addr", [
+    "PO Box 4417, Station A, Toronto ON",
+    "Unit 7, Harbourside Business Centre, Plymouth PL4 0RA",
+])
+def test_po_boxes_and_numbered_units(det, addr):
+    text = f"Send to {addr}."
+    assert _covers(_spans_of(det, text, "ADDRESS"), text, addr)
+
+
+def test_each_pattern_recognizer_has_its_own_name(det):
+    spans = det.detect("Mail a@b.co or call 202-555-0147.")
+    assert {s.detector.split(".")[0] for s in spans} >= {"email_pattern", "phone_pattern"}
