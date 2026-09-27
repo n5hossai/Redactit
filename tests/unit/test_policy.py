@@ -1,0 +1,196 @@
+"""Policy loading, tighten-only merge, dial thresholds and decide()."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from redactit.policy import Policy, load_policy
+from redactit.types import Span
+
+EXAMPLE = Path(__file__).resolve().parents[2] / "policy.example.yaml"
+
+
+def write(path: Path, text: str) -> Path:
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_loads_the_shipped_example_policy():
+    policy = load_policy(user=EXAMPLE)
+    assert policy.entities["CREDIT_CARD"].locked is True
+    assert policy.entities["PERSON"].action == "pseudonymize"
+    assert policy.effective_dial() == 3
+
+
+def test_bad_key_error_names_the_field(tmp_path):
+    bad = write(tmp_path / "user.yaml", "dial:\n  postion: 3\n")  # typo'd key
+    with pytest.raises(ValueError, match="postion"):
+        load_policy(user=bad)
+
+
+def test_bad_action_error_names_the_value(tmp_path):
+    bad = write(tmp_path / "user.yaml", "entities:\n  PERSON: {action: shred}\n")
+    with pytest.raises(ValueError, match="entities.PERSON"):
+        load_policy(user=bad)
+
+
+def test_admin_floor_raises_a_lower_user_position(tmp_path):
+    managed = write(tmp_path / "managed.yaml", "dial: {position: 4, admin_floor: 4}\n")
+    user = write(tmp_path / "user.yaml", "dial: {position: 1}\n")
+    policy = load_policy(user=user, managed=managed)
+    assert policy.effective_dial() == 4
+
+
+def test_user_may_raise_above_the_floor(tmp_path):
+    managed = write(tmp_path / "managed.yaml", "dial: {admin_floor: 2}\n")
+    user = write(tmp_path / "user.yaml", "dial: {position: 5}\n")
+    policy = load_policy(user=user, managed=managed)
+    assert policy.effective_dial() == 5
+
+
+def test_locked_type_cannot_be_unlocked_by_user(tmp_path):
+    managed = write(tmp_path / "managed.yaml", "entities:\n  CREDIT_CARD: {action: mask, locked: true}\n")
+    user = write(tmp_path / "user.yaml", "entities:\n  CREDIT_CARD: {action: mask, locked: false}\n")
+    policy = load_policy(user=user, managed=managed)
+    assert policy.entities["CREDIT_CARD"].locked is True
+
+
+def test_enabled_type_cannot_be_disabled_by_user(tmp_path):
+    managed = write(tmp_path / "managed.yaml", "entities:\n  PERSON: {action: pseudonymize, enabled: true}\n")
+    user = write(tmp_path / "user.yaml", "entities:\n  PERSON: {action: pseudonymize, enabled: false}\n")
+    policy = load_policy(user=user, managed=managed)
+    assert policy.entities["PERSON"].enabled is True
+
+
+def test_user_may_enable_a_type_managed_left_disabled(tmp_path):
+    managed = write(tmp_path / "managed.yaml", "entities:\n  DATE_OF_BIRTH: {action: mask, enabled: false}\n")
+    user = write(tmp_path / "user.yaml", "entities:\n  DATE_OF_BIRTH: {action: mask, enabled: true}\n")
+    policy = load_policy(user=user, managed=managed)
+    assert policy.entities["DATE_OF_BIRTH"].enabled is True
+
+
+def test_user_may_lock_a_type_managed_left_unlocked(tmp_path):
+    managed = write(tmp_path / "managed.yaml", "entities:\n  PERSON: {action: pseudonymize}\n")
+    user = write(tmp_path / "user.yaml", "entities:\n  PERSON: {action: pseudonymize, locked: true}\n")
+    policy = load_policy(user=user, managed=managed)
+    assert policy.entities["PERSON"].locked is True
+
+
+def test_site_dial_raises_but_never_lowers(tmp_path):
+    managed = write(tmp_path / "managed.yaml", "sites:\n  chatgpt.com: {dial: 4}\n")
+    user = write(tmp_path / "user.yaml", "dial: {position: 2}\nsites:\n  chatgpt.com: {dial: 1}\n")
+    policy = load_policy(user=user, managed=managed)
+    assert policy.effective_dial("chatgpt.com") == 4
+    assert policy.effective_dial("other.example") == 2
+
+
+def test_custom_terms_and_allowlist_are_unioned(tmp_path):
+    managed = write(tmp_path / "managed.yaml", "custom_terms: {terms: [ProjectFalcon]}\nallowlist: [Redactit]\n")
+    user = write(tmp_path / "user.yaml", "custom_terms: {terms: [Nimbus]}\nallowlist: [MyCompany]\n")
+    policy = load_policy(user=user, managed=managed)
+    assert set(policy.custom_terms.terms) == {"ProjectFalcon", "Nimbus"}
+    assert set(policy.allowlist) == {"Redactit", "MyCompany"}
+
+
+def test_company_terms_reads_listed_files(tmp_path):
+    terms_file = write(tmp_path / "terms.txt", "Acme Corp\nProjectFalcon\n")
+    user = write(tmp_path / "user.yaml", f"custom_terms: {{files: [{terms_file.name}], terms: [Nimbus]}}\n")
+    policy = load_policy(user=user)
+    assert set(policy.company_terms()) == {"Acme Corp", "ProjectFalcon", "Nimbus"}
+
+
+def _policy(**entities) -> Policy:
+    return Policy(entities=entities)
+
+
+def test_decide_drops_disabled_type():
+    policy = _policy(PERSON={"action": "pseudonymize", "enabled": False})
+    span = Span(0, 5, "PERSON", 0.99, "gliner")
+    assert policy.decide("Priya", [span]) == []
+
+
+def test_decide_drops_below_threshold():
+    policy = _policy(PERSON={"action": "pseudonymize"})
+    span = Span(0, 5, "PERSON", 0.10, "gliner")  # dial 3 threshold 0.65
+    assert policy.decide("Priya", [span]) == []
+
+
+def test_decide_drops_allowlisted_value():
+    policy = Policy(entities={"PERSON": {"action": "pseudonymize"}}, allowlist=["priya okafor"])
+    span = Span(0, 12, "PERSON", 0.99, "gliner")
+    assert policy.decide("Priya Okafor", [span]) == []
+
+
+def test_allowlist_never_applies_to_locked_type():
+    policy = Policy(
+        entities={"CREDIT_CARD": {"action": "mask", "locked": True}},
+        allowlist=["4111111111111111"],
+    )
+    span = Span(0, 16, "CREDIT_CARD", 0.99, "luhn", validated=True)
+    decisions = policy.decide("4111111111111111", [span])
+    assert len(decisions) == 1
+
+
+def test_validated_locked_span_always_passes():
+    policy = _policy(CREDIT_CARD={"action": "mask", "locked": True})
+    span = Span(0, 5, "CREDIT_CARD", 0.01, "luhn", validated=True)
+    decisions = policy.decide("41111", [span])
+    assert len(decisions) == 1
+
+
+def test_reason_never_contains_matched_text():
+    policy = _policy(PERSON={"action": "pseudonymize"})
+    span = Span(0, 12, "PERSON", 0.87, "gliner")
+    decisions = policy.decide("Priya Okafor", [span])
+    assert decisions[0].reason == "gliner score=0.87 dial=3 threshold=0.65"
+    assert "Priya" not in decisions[0].reason
+    assert decisions[0].rule_id == "entities.PERSON"
+
+
+def test_overlap_prefers_validated_then_score_then_length():
+    policy = _policy(PERSON={"action": "pseudonymize"}, COMPANY_TERM={"action": "pseudonymize"})
+    # Both spans clear their own threshold; overlap resolution still must prefer validated.
+    validated = Span(0, 12, "PERSON", 0.70, "validator", validated=True)
+    higher_score = Span(0, 12, "COMPANY_TERM", 0.99, "gliner")
+    decisions = policy.decide("Priya Okafor", [validated, higher_score])
+    assert len(decisions) == 1
+    assert decisions[0].span is validated
+
+
+def test_decisions_are_non_overlapping_and_sorted_by_start():
+    policy = _policy(PERSON={"action": "pseudonymize"}, EMAIL={"action": "pseudonymize"})
+    person = Span(6, 18, "PERSON", 0.99, "gliner")  # "Priya Okafor"
+    email = Span(0, 5, "EMAIL", 0.99, "gliner")  # "email"
+    decisions = policy.decide("email Priya Okafor", [person, email])
+    assert [d.span.start for d in decisions] == [0, 6]
+
+
+def test_needs_review_always_mode():
+    policy = Policy(entities={"PERSON": {"action": "pseudonymize"}}, review={"mode": "always"})
+    span = Span(0, 12, "PERSON", 0.99, "gliner", validated=True)
+    decisions = policy.decide("Priya Okafor", [span])
+    assert decisions[0].needs_review is True
+
+
+def test_needs_review_low_confidence_only():
+    policy = _policy(PERSON={"action": "pseudonymize"})
+    close_to_threshold = Span(0, 12, "PERSON", 0.66, "gliner")  # < 0.65 + 0.15
+    confident = Span(0, 12, "PERSON", 0.95, "gliner")
+    assert policy.decide("Priya Okafor", [close_to_threshold])[0].needs_review is True
+    assert policy.decide("Priya Okafor", [confident])[0].needs_review is False
+
+
+def test_review_mode_is_tighten_only(tmp_path):
+    managed = write(tmp_path / "managed.yaml", "review: {mode: always}\n")
+    user = write(tmp_path / "user.yaml", "review: {mode: low_confidence_only}\n")
+    policy = load_policy(user=user, managed=managed)
+    assert policy.review.mode == "always"
+
+
+def test_vault_retention_takes_the_stricter_value(tmp_path):
+    managed = write(tmp_path / "managed.yaml", "vault: {retention_days: 30}\n")
+    user = write(tmp_path / "user.yaml", "vault: {retention_days: 7}\n")
+    policy = load_policy(user=user, managed=managed)
+    assert policy.vault.retention_days == 7
