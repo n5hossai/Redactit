@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from redactit.policy import Policy, load_policy
+from redactit.policy import Policy, PolicyError, load_policy
 from redactit.types import Span
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "src" / "redactit" / "policy.default.yaml"
@@ -86,12 +86,24 @@ def test_site_dial_raises_but_never_lowers(tmp_path):
     assert policy.effective_dial("other.example") == 2
 
 
-def test_custom_terms_and_allowlist_are_unioned(tmp_path):
+def test_custom_terms_are_unioned_but_only_the_admin_may_allowlist(tmp_path):
     managed = write(tmp_path / "managed.yaml", "custom_terms: {terms: [ProjectFalcon]}\nallowlist: [Redactit]\n")
-    user = write(tmp_path / "user.yaml", "custom_terms: {terms: [Nimbus]}\nallowlist: [MyCompany]\n")
+    user = write(tmp_path / "user.yaml", "custom_terms: {terms: [Nimbus]}\nallowlist: [Priya Okafor]\n")
     policy = load_policy(user=user, managed=managed)
     assert set(policy.custom_terms.terms) == {"ProjectFalcon", "Nimbus"}
-    assert set(policy.allowlist) == {"Redactit", "MyCompany"}
+    assert policy.allowlist == ["Redactit"]
+
+
+def test_missing_custom_terms_file_fails_closed(tmp_path):
+    user = write(tmp_path / "user.yaml", "custom_terms: {files: [clients.txt]}\n")
+    with pytest.raises(PolicyError, match="not found"):
+        load_policy(user).company_terms()
+
+
+def test_admin_dial_position_holds_when_the_user_file_leaves_it_alone(tmp_path):
+    managed = write(tmp_path / "managed.yaml", "dial: {position: 5}\n")
+    user = write(tmp_path / "user.yaml", "custom_terms: {terms: [Nimbus]}\n")
+    assert load_policy(user, managed).effective_dial() == 5
 
 
 def test_company_terms_reads_listed_files(tmp_path):
@@ -149,14 +161,22 @@ def test_reason_never_contains_matched_text():
     assert decisions[0].rule_id == "entities.PERSON"
 
 
-def test_overlap_prefers_validated_then_score_then_length():
+def test_equal_overlap_prefers_validated_then_score():
     policy = _policy(PERSON={"action": "pseudonymize"}, COMPANY_TERM={"action": "pseudonymize"})
-    # Both spans clear their own threshold; overlap resolution still must prefer validated.
     validated = Span(0, 12, "PERSON", 0.70, "validator", validated=True)
     higher_score = Span(0, 12, "COMPANY_TERM", 0.99, "gliner")
     decisions = policy.decide("Priya Okafor", [validated, higher_score])
-    assert len(decisions) == 1
-    assert decisions[0].span is validated
+    assert [d.span for d in decisions] == [validated]
+
+
+def test_overlapping_spans_redact_their_union():
+    """A validated company term inside an email must not leave the email's local part behind."""
+    policy = _policy(EMAIL={"action": "pseudonymize"}, COMPANY_TERM={"action": "pseudonymize"})
+    text = "priya.okafor@northwind.com"
+    email = Span(0, len(text), "EMAIL", 0.95, "email")
+    term = Span(13, 22, "COMPANY_TERM", 1.0, "dictionary", validated=True)
+    [decision] = policy.decide(text, [email, term])
+    assert (decision.span.start, decision.span.end, decision.span.entity_type) == (0, len(text), "EMAIL")
 
 
 def test_decisions_are_non_overlapping_and_sorted_by_start():

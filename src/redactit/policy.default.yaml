@@ -7,8 +7,7 @@ dial:
   admin_floor: 3     # users cannot go below this; it is the lowest dial the leak test proves
 
 review:
-  mode: low_confidence_only   # or: always
-  timeout_action: block       # an unreviewed item is never sent unredacted
+  mode: low_confidence_only   # or: always. An item awaiting review always blocks the send.
 
 # Actions:
 #   pseudonymize  "Priya Okafor" -> "[PERSON_1]", consistent within one chat
@@ -35,7 +34,7 @@ entities:
 custom_terms:
   files: []          # one term per line: client names, project codenames
   terms: []
-allowlist: []        # never redacted, e.g. your own company name
+allowlist: []        # never redacted, e.g. your own company name. Admin file only.
 
 vault:
   retention_days: 30

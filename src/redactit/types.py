@@ -3,6 +3,10 @@
 from dataclasses import dataclass
 
 
+class RedactitError(Exception):
+    """An error whose message is known not to contain input text, so it is safe to show."""
+
+
 @dataclass(frozen=True)
 class Span:
     """A detected entity at [start, end) of the analysed text.

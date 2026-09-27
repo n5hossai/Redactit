@@ -8,10 +8,12 @@ from pathlib import Path
 
 import platformdirs
 
+from redactit.types import RedactitError
+
 LOCK = json.loads(Path(__file__).with_name("models.lock.json").read_text(encoding="utf-8"))
 
 
-class ModelError(RuntimeError):
+class ModelError(RedactitError, RuntimeError):
     pass
 
 
