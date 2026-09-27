@@ -10,7 +10,7 @@ import platformdirs
 
 from redactit import __version__
 
-TEXT_SUFFIXES = {".txt", ".md"}
+TEXT_SUFFIXES = {".txt", ".md", ".docx"}  # Word documents come out as Markdown
 
 
 def _paths() -> dict[str, Path]:
@@ -29,6 +29,7 @@ def _redact(args: argparse.Namespace) -> int:
 
     safety.block_network()  # before any detector or model code is imported and run
     from redactit.audit import AuditLog
+    from redactit.formats.docx import docx_to_markdown
     from redactit.managed import assert_admin_owned, managed_policy_path
     from redactit.pipeline import Engine
     from redactit.policy import load_policy
@@ -48,8 +49,10 @@ def _redact(args: argparse.Namespace) -> int:
         if src.suffix.lower() not in TEXT_SUFFIXES:
             print(f"skipped {i}/{len(args.paths)}: {src.suffix or 'no extension'} is not supported yet", file=sys.stderr)
             continue
-        result = engine.redact(src.read_text(encoding="utf-8"), scope, file_type=src.suffix[1:].lower(), site=args.site)
-        (args.out / src.name).write_text(result.text, encoding="utf-8")
+        is_docx = src.suffix.lower() == ".docx"
+        text = docx_to_markdown(src.read_bytes()) if is_docx else src.read_text(encoding="utf-8")
+        result = engine.redact(text, scope, file_type=src.suffix[1:].lower(), site=args.site)
+        (args.out / (src.with_suffix(".md").name if is_docx else src.name)).write_text(result.text, encoding="utf-8")
         print(f"redacted {i}/{len(args.paths)}: {len(result.decisions)} items")
     return 0
 
@@ -67,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="store_true", help="print the version and exit")
     sub = parser.add_subparsers(dest="command")
 
-    redact = sub.add_parser("redact", help="redact text or Markdown files")
+    redact = sub.add_parser("redact", help="redact text, Markdown or Word files")
     redact.add_argument("paths", nargs="+", type=Path)
     redact.add_argument("--out", type=Path, required=True, help="output folder")
     redact.add_argument("--policy", type=Path, help="policy file (default: user policy if present)")

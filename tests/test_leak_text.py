@@ -1,4 +1,4 @@
-"""Phase 2 acceptance: zero seeded values survive in text and Markdown, from the default
+"""Acceptance: zero seeded values survive in text, Markdown and Word files, from the default
 admin floor (the lowest dial a user can reach) to the tightest dial, and none reach the
 audit log. Skipped until models are installed."""
 

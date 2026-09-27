@@ -17,12 +17,15 @@ from pathlib import Path
 
 import yaml
 from redactit.audit import AuditLog
+from redactit.formats.docx import docx_to_markdown
 from redactit.pipeline import Engine
 from redactit.policy import DEFAULT_POLICY, load_policy
 from redactit.vault import Vault
 from run import normalize
 
-SUPPORTED = {"txt", "md"}
+SUPPORTED = {"txt", "md", "docx"}
+# Word documents are redacted as Markdown; everything else keeps its format.
+READERS = {"docx": (lambda p: docx_to_markdown(p.read_bytes()), ".md")}
 
 
 def redact_corpus(corpus: Path, out: Path, dial: int, formats: set[str] = SUPPORTED) -> None:
@@ -37,9 +40,10 @@ def redact_corpus(corpus: Path, out: Path, dial: int, formats: set[str] = SUPPOR
         spans = []
         manifest = json.loads((corpus / "manifest.json").read_text(encoding="utf-8"))
         for doc in (d for d in manifest["documents"] if d["format"] in formats):
-            text = (corpus / doc["file"]).read_text(encoding="utf-8")
+            read, suffix = READERS.get(doc["format"], (lambda p: p.read_text(encoding="utf-8"), None))
+            text = read(corpus / doc["file"])
             result = engine.redact(text, scope=doc["file"], file_type=doc["format"])
-            dst = out / doc["file"]
+            dst = out / doc["file"] if suffix is None else (out / doc["file"]).with_suffix(suffix)
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_text(result.text, encoding="utf-8")
             spans += [
