@@ -1,66 +1,52 @@
-"""Every installed distribution must be MIT, Apache-2.0, BSD or ISC (see
-docs/PLAN.md #3/#8) unless explicitly flagged below. This fails the build
-the moment a copyleft dependency (GPL/LGPL/AGPL/MPL) sneaks in, instead of
-that being discovered at release time.
+"""Every installed distribution must be MIT, Apache-2.0, BSD or ISC (docs/PLAN.md §3, §8)
+unless it is a reviewed exception below.
+
+Checks both the declared license and the license files a wheel bundles: a package can
+declare "Apache 2.0" while shipping an LGPL library inside it.
 """
 
 import importlib.metadata as metadata
 import re
 
-# Distributions with a human-reviewed exception. One line each: SPDX id(s)
-# plus why the license is acceptable despite not being a literal MIT/
-# Apache-2.0/BSD/ISC match. Never add an entry here to work around a real
-# copyleft dependency -- only for licenses that are permissive in substance.
+# Reviewed exceptions, one reason each. Everything here is test-only unless it says
+# otherwise; never add an entry to get past a real copyleft dependency in shipped code.
 FLAGGED = {
-    "pillow": "MIT-CMU -- historical PIL license, MIT-equivalent permissive terms",
-    "defusedxml": "PSF-2.0 -- permissive; standard XML entity-attack guard for DOCX parsing",
-    "numpy": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 -- aggregate of "
-    "permissive/public-domain pieces (transitive via rapidocr-onnxruntime, test-only)",
-    "tqdm": "MPL-2.0 AND MIT -- file-level copyleft that applies only to tqdm's own files, "
-    "used unmodified; test-only progress bars pulled in by rapidocr-onnxruntime, never shipped",
+    "pillow": "MIT-CMU: historical PIL license, MIT-equivalent terms",
+    "defusedxml": "PSF-2.0: permissive; the standard XML entity-attack guard for DOCX",
+    "numpy": "BSD/MIT/Zlib/CC0 parts plus the GCC runtime library exception; via rapidocr",
+    "tqdm": "MPL-2.0 AND MIT: file-level copyleft on tqdm's own files, used unmodified; via rapidocr",
+    "opencv-python": "Apache-2.0, but the wheel bundles FFmpeg (LGPL-2.1) as a separate DLL; via rapidocr",
+    "shapely": "BSD-3, but the wheel bundles GEOS (LGPL-2.1) as a separate library; via rapidocr",
 }
 
-# Not third-party runtime code we ship; excluded per the task brief.
-IGNORE = {"redactit", "pip", "setuptools", "wheel", "uv"}
-
-ALLOWED = re.compile(r"\b(MIT|Apache[- ]?2\.0|BSD|ISC)\b", re.I)
-COPYLEFT = re.compile(r"\b(AGPL|LGPL|GPL|MPL)\b", re.I)
-
-
-def _permissive(clause: str) -> bool:
-    """A single license clause (no boolean operators left) is allowed."""
-    return bool(ALLOWED.search(clause)) and not COPYLEFT.search(clause)
+ALLOWED = re.compile(r"\b(MIT|Apache|BSD|ISC)\b", re.I)
+# Any mention fails, even inside "X OR Y": a mis-parsed SPDX expression must never let a
+# copyleft component through, so genuinely dual-licensed packages go through FLAGGED.
+COPYLEFT = re.compile(r"\b(A?GPL|LGPL|MPL)|GNU (LESSER |LIBRARY |AFFERO )?GENERAL PUBLIC", re.I)
 
 
-def _license_ok(text: str) -> bool:
-    """Evaluate an SPDX-ish boolean expression: OR only needs one permissive
-    option (a licensee's choice); AND needs every part permissive, since all
-    of them apply at once to the combined work."""
-    or_parts = re.split(r"\bOR\b", text, flags=re.I)
-    if len(or_parts) > 1:
-        return any(_license_ok(p) for p in or_parts)
-    and_parts = re.split(r"\bAND\b", text, flags=re.I)
-    if len(and_parts) > 1:
-        return all(_license_ok(p) for p in and_parts)
-    return _permissive(text)
-
-
-def _license_text(dist: metadata.Distribution) -> str | None:
-    """License-Expression (SPDX) first, then the free-text License field,
-    then classifiers -- most dists only populate one of the three."""
+def _declared(dist: metadata.Distribution) -> str:
+    """License-Expression (SPDX) first, then the free-text License field, then classifiers."""
     meta = dist.metadata
     classifiers = "; ".join(c for c in meta.get_all("Classifier") or [] if c.startswith("License"))
-    return meta.get("License-Expression") or meta.get("License") or classifiers or None
+    return meta.get("License-Expression") or meta.get("License") or classifiers
+
+
+def _bundled(dist: metadata.Distribution) -> str:
+    """Text of every license-like file shipped in the wheel."""
+    names = re.compile(r"(^|/)(LICEN[CS]E|COPYING|NOTICE)[^/]*$", re.I)
+    return " ".join(f.locate().read_text(errors="ignore") for f in dist.files or [] if names.search(str(f)))
 
 
 def test_installed_dependencies_are_permissively_licensed():
     failures = []
     for dist in metadata.distributions():
         name = dist.metadata["Name"]
-        key = name.lower()
-        if key in IGNORE or key in FLAGGED:
+        if name.lower() in FLAGGED or name.lower() == "redactit":
             continue
-        text = _license_text(dist)
-        if not text or not _license_ok(text):
-            failures.append(f"{name}: {text!r}")
-    assert not failures, "Non-permissive or unlicensed dependencies:\n" + "\n".join(failures)
+        declared = _declared(dist)
+        if not ALLOWED.search(declared) or COPYLEFT.search(declared):
+            failures.append(f"{name}: declares {declared!r}")
+        elif COPYLEFT.search(_bundled(dist)):
+            failures.append(f"{name}: bundles a copyleft license file")
+    assert not failures, "Non-permissive dependencies:\n" + "\n".join(failures)
