@@ -109,15 +109,14 @@ The acceptance bar is zero surviving seeded values, so recall matters more than 
 **Checkpoint:** `knowledgator/gliner-pii-base-v1.0` (Apache-2.0, English-tuned, 60+ PII
 labels, ships ONNX weights). `knowledgator/gliner-pii-edge-v1.0` is the lighter fallback
 if shortcut latency is too high. `nvidia/gliner-PII` is excluded because it uses a custom
-license. Presidio ships `GLiNERRecognizer` (installed via `presidio-analyzer[gliner]`),
-so the integration needs no custom recognizer code. Revision and SHA-256 go in
-`models.lock.json`.
+license. The model runs outside Presidio (see the decision below); its spans join the
+Presidio pattern spans before the policy decides. Revision and SHA-256 are pinned in
+`src/redactit/models.lock.json`.
 
-**Open decision for Phase 2:** the `gliner` package hard-depends on `torch`. Either
-(a) pin the CPU-only torch wheel after checking its bundled-library licenses (Intel MKL
-is not MIT, Apache or BSD), or (b) run the ONNX weights directly on `onnxruntime` with
-`tokenizers` and drop torch entirely. Option (b) is preferred if span decoding stays
-under about 80 lines.
+**Decided in Phase 2:** the `gliner` package (and its `torch` dependency, whose bundled
+MKL license was unverified) is not used. `detect/ner.py` runs the full-precision ONNX
+export directly on `onnxruntime` with `tokenizers` in about 60 lines. The quantised export
+was rejected: it scored 4 of 15 synthetic addresses below the default threshold.
 
 ## 4. File layout
 
@@ -125,8 +124,8 @@ under about 80 lines.
 Redactit/
 ├─ pyproject.toml            # deps, entry point `redactit`
 ├─ uv.lock
-├─ models.lock.json          # model name, URL, revision, SHA-256
-├─ policy.example.yaml       # annotated default policy
+├─ src/redactit/models.lock.json  # model URL (pinned revision) and SHA-256
+├─ src/redactit/policy.default.yaml  # annotated default policy, the base layer
 ├─ src/redactit/
 │  ├─ cli.py                 # redact, verify, clip, watch, setup-models
 │  ├─ types.py               # Segment, Span, Decision
@@ -135,13 +134,14 @@ Redactit/
 │  ├─ pseudonym.py           # [TYPE_N] allocation per chat scope
 │  ├─ vault.py               # encrypted mapping store, 30-day purge
 │  ├─ audit.py               # JSONL writer, sanitised reasons only
-│  ├─ safety.py              # private temp dir, log filter, offline guards
+│  ├─ safety.py              # blocks IP sockets and DNS inside the engine
+│  ├─ managed.py             # OS-derived admin policy path, admin-ownership check
 │  ├─ models.py              # load-time SHA-256 verification
 │  ├─ detect/
 │  │  ├─ patterns.py         # regexes + validators (Luhn, IBAN, SIN, SSN, NINO)
 │  │  ├─ secrets.py          # API key and token formats, PEM blocks, JWTs
 │  │  ├─ dictionary.py       # company terms, allowlist
-│  │  └─ ner.py              # GLiNER recognizer for Presidio
+│  │  └─ ner.py              # GLiNER on onnxruntime, token-budget windows
 │  ├─ formats/
 │  │  ├─ text.py             # .txt / .md
 │  │  ├─ docx.py             # body, headers, footers, notes, comments, revisions
@@ -193,12 +193,20 @@ are committed.
 
 ## 6. Policy, dial and pseudonyms
 
-- **Layers.** A managed policy (admin-writable only, e.g. `%ProgramData%\Redactit\policy.yaml`
-  or `/etc/redactit/policy.yaml`) is merged with the user policy. The merge is
-  **tighten-only**: a user can raise the dial, add terms, or enable types, but cannot go
-  below the admin floor or unlock locked types.
-- **Dial 1 to 5.** Maps to a per-entity-type score threshold. The default is 3.
-  Contact details get lower thresholds than general names at every position.
+- **Layers.** Built-in defaults (`policy.default.yaml`), overridden by the admin's managed
+  policy, then merged with the user policy. The managed path comes from the OS
+  (`C:\ProgramData\Redactit\policy.yaml` via the known-folder API, `/etc/redactit`,
+  `/Library/Application Support/Redactit`), never from environment variables, and a file
+  the current user owns is refused. The user merge is **tighten-only**: a user can raise
+  the dial, add terms, or enable types, but cannot go below the admin floor, unlock locked
+  types, or allowlist values (only the admin can).
+- **Per-site rules.** `sites.<host>.dial` raises the dial for one AI site (e.g. chatgpt.com
+  at 4); it can never lower it.
+- **Dial 1 to 5.** Maps to a per-entity-type score threshold. The default is 3, and so
+  is the default admin floor: it is the lowest dial the leak test proves, so a user
+  cannot go below it unless an admin lowers the floor. Contact details sit 0.05 lower;
+  names and addresses from the model sit 0.15 lower, because its probabilities run lower
+  than pattern scores for the same certainty.
 - **Locked types** (cards, IBAN, API keys, SIN, SSN, NINO, passport numbers) are
   validator-driven and apply at every dial position.
 - **Review mode** `always` or `low_confidence_only`. A review that times out blocks the
@@ -239,8 +247,8 @@ are committed.
 - Temporary files go in a private directory (`0700` on POSIX, user-only ACL on Windows),
   deleted in `finally`. In-memory processing is the default.
 - Models are downloaded once by `redactit setup-models`, pinned by SHA-256, and verified at
-  every load. At runtime the engine sets the Hugging Face offline flags and never
-  downloads anything.
+  every load. At runtime the engine blocks every non-Unix socket and every DNS lookup in
+  its own process, so no dependency can phone home.
 - CI runs a license check that fails on anything outside MIT, Apache or BSD unless it is
   listed here.
 - Synthetic data only. Real documents are never committed.
@@ -254,6 +262,10 @@ are committed.
 | torch (only if option (a) in 3.1 is chosen) | BSD-3 plus bundled libraries | Bundled Intel MKL license is **unverified**; must be checked before it is accepted |
 | pypdfium2 | BSD-3 / Apache-2.0; bundled PDFium notices mention GPL | Mentions are ICU's autoconf macros (GPL with the Autoconf exception, build scripts only) and the LLVM exception clause; no copyleft code in the binary |
 | OpenCV wheels (runtime from Phase 3: RapidOCR, YuNet) | Apache-2.0, but every wheel bundles FFmpeg (LGPL-2.1) as a separate DLL | **Open decision for Phase 3.** LGPL permits unmodified dynamic use. The alternative is building OpenCV without video I/O. |
+
+Runtime exceptions accepted by the owner (used unmodified; obligations attach only to
+changes in their own files): certifi (MPL-2.0, via requests/httpx), setuptools (MIT, vendoring
+LGPL-3 and MPL-2.0 files, required by spaCy), typing-extensions (PSF-2.0).
 
 Test-only exceptions (never shipped), enforced in `tests/test_licenses.py`: numpy
 (BSD/MIT/Zlib/CC0 plus the GCC runtime exception), tqdm (MPL-2.0 AND MIT), opencv-python
@@ -270,7 +282,7 @@ linked into Redactit.
    values recorded in a manifest. It includes hard cases: values split across lines, cards
    with spaces or dashes, PII in DOCX headers, comments and deleted revisions, text inside
    images embedded in PDFs, low-contrast and rotated text, and QR codes that encode PII.
-2. Redact the corpus with the default policy, and again at the admin floor.
+2. Redact the corpus at the admin floor and at the tightest dial.
 3. Verify each output **independently of the redactor**. Correlated errors would hide
    leaks, so the verifier uses higher-resolution rendering and its own OCR settings. It
    also compares normalised forms (digits only for numbers, case-folded names, edit

@@ -20,6 +20,11 @@ FLAGGED = {
     # Runtime from Phase 3. Its GPL mentions are ICU's autoconf macros (GPL with the
     # Autoconf exception, build scripts only) and the LLVM exception clause naming GPLv2.
     "pypdfium2": "BSD-3/Apache-2.0; bundled notices mention GPL only in build-script and exception text",
+    # Runtime, via spaCy/Presidio/tokenizers; accepted by the owner. Used unmodified, and
+    # MPL/LGPL obligations attach only to changes in their own files.
+    "certifi": "MPL-2.0: CA bundle pulled in by requests/httpx; the offline engine never uses it",
+    "setuptools": "MIT, vendoring autocommand (LGPL-3) and validate-pyproject files (MPL-2.0); spaCy needs it",
+    "typing-extensions": "PSF-2.0: permissive; required by most typed libraries",
 }
 
 ALLOWED = re.compile(r"\b(MIT|Apache|BSD|ISC)\b", re.I)
@@ -50,7 +55,8 @@ def test_installed_dependencies_are_permissively_licensed():
     failures = []
     for dist in metadata.distributions():
         name = dist.metadata["Name"]
-        if name.lower() in FLAGGED or name.lower() == "redactit":
+        key = re.sub(r"[-_.]+", "-", name).lower()  # PEP 503: typing_extensions == typing-extensions
+        if key in FLAGGED or key == "redactit":
             continue
         declared = _declared(dist)
         if not ALLOWED.search(declared) or COPYLEFT.search(declared):

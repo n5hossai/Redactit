@@ -13,8 +13,11 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false  # one OS failing must not hide the others' results
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
+    env:
+      REDACTIT_MODEL_DIR: .models
     steps:
       # Pinned to commit SHAs so a moved tag cannot change what runs.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -22,4 +25,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --locked
+      # Models are fetched once per lockfile change; the tests themselves stay offline.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .models
+          key: models-${{ hashFiles('src/redactit/models.lock.json') }}
+      - run: uv run redactit setup-models
       - run: uv run pytest -q

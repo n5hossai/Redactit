@@ -62,7 +62,7 @@ flowchart LR
 
 | # | Threat | Boundary | Control | Enforced by |
 |---|---|---|---|---|
-| T1 | A seeded value survives redaction (missed detection) | Engine | Validators + dictionaries + GLiNER + dial; review for low confidence | Leak test, zero survivors at dial 3 and at the admin floor |
+| T1 | A seeded value survives redaction (missed detection) | Engine | Validators + dictionaries + GLiNER + dial; review for low confidence | Leak test: zero survivors from the admin floor (dial 3) to dial 5 |
 | T2 | Text survives in a PDF layer, metadata or embedded image | Engine | Pages rebuilt from images only; every page also goes through the image pipeline | Leak test: re-extract text layer, 300 DPI re-OCR, raw byte search |
 | T3 | EXIF/GPS or text chunks survive in an image | Engine | Re-encode from raw pixels | Leak test: metadata dump and byte search |
 | T4 | DOCX comments, tracked deletions, headers or `docProps` leak | Engine | All OOXML parts walked; `docProps` dropped from output | Leak test DOCX variants |
@@ -72,10 +72,10 @@ flowchart LR
 | T8 | Another extension or process drives the native host | B2 | `allowed_origins` with one fixed ID; host also checks the origin argument Chrome passes | Installer test (Phase 4) |
 | T9 | Oversized or malformed native messages crash the host or truncate data | B2 | Length-prefixed frames, 512 KiB chunks, strict JSON schema, size caps | Host unit tests (Phase 4) |
 | T10 | Raw values end up in logs, exceptions or the audit file | B3 | Audit stores types, counts, rule IDs and scores only; logging filter; sanitised exception type | Leak test scans logs and audit file (Phase 2) |
-| T11 | Temp files are left behind or readable by others | B3 | Private dir (0700 or user-only ACL), deleted in `finally`; memory by default | Test that the temp dir is empty after each run (Phase 2) |
+| T11 | Temp files are left behind or readable by others | B3 | Private dir (0700 or user-only ACL), deleted in `finally`; memory by default | Test that the temp dir is empty after each run (Phase 3, first use of temp files) |
 | T12 | Vault read from disk | B3 | AES-256-GCM, key in OS keychain, 30-day purge | Vault unit tests (Phase 2) |
 | T13 | User weakens the policy | Engine | Managed layer, tighten-only merge, locked types | Policy merge tests (Phase 2) |
-| T14 | Engine phones home or downloads at runtime | B4 | No network code; Hugging Face offline flags set at startup; sockets disabled in tests | `tests/test_offline.py` |
+| T14 | Engine phones home or downloads at runtime | B4 | Only `setup-models` has network code; `safety.block_network()` refuses IP sockets and DNS in the engine process; sockets disabled in tests | `tests/test_offline.py` |
 | T15 | Tampered or swapped model file | B4 | SHA-256 verified on every load; download only in setup | Model loader test (Phase 2) |
 | T16 | Clipboard captures a password-manager secret | Engine | Items marked concealed are skipped; redaction only on a keypress, no monitoring | Clipboard tests per OS (Phase 4) |
 | T17 | Copyleft dependency creeps in | Supply chain | License test fails on anything outside MIT/Apache/BSD unless flagged | `tests/test_licenses.py` |

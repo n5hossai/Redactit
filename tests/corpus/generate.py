@@ -149,7 +149,8 @@ class ValueFactory:
         return f"GB{iban_check_digits('GB', bban)}{bban}"
 
     def ca_sin(self) -> str:
-        body = str(self.rng.randint(1, 9)) + "".join(str(self.rng.randint(0, 9)) for _ in range(7))
+        # Real SINs never start with 0 or 8, so neither may synthetic ones.
+        body = self.rng.choice("1234567" "9") + "".join(str(self.rng.randint(0, 9)) for _ in range(7))
         return body + luhn_check_digit(body)
 
     def us_ssn(self) -> str:
@@ -226,14 +227,23 @@ def build_txt(vf: ValueFactory, path: Path) -> list[dict]:
     address = seed("ADDRESS", vf.address())
     dob = seed("DATE_OF_BIRTH", vf.dob())
     card = seed("CREDIT_CARD", vf.credit_card())
+    iban = seed("IBAN", vf.iban())
+    ssn = seed("US_SSN", vf.us_ssn())
+    nino = seed("UK_NINO", vf.uk_nino())
+    passport = seed("PASSPORT", vf.passport())
+    # A name wrapped onto the next line, as in hard-wrapped plain text.
+    reviewer = vf.person()
+    entries.append({"entity_type": "PERSON", "value": reviewer, "location": "split_lines"})
+    wrapped = reviewer.replace(" ", "\n", 1)
 
     text = (
         f"Subject: {term} account update\n\n"
         f"{vf.filler_paragraph()}\n\n"
         f"Please contact {person} at {email} or {phone} about the account.\n"
         f"Billing address: {address}.\n"
-        f"Date of birth on file: {dob}. Card on file: {card}.\n\n"
-        f"{vf.filler_paragraph()}\n"
+        f"Date of birth on file: {dob}. Card on file: {card}.\n"
+        f"Refunds go to IBAN {iban}. SSN {ssn}, NI number {nino}, passport {passport}.\n\n"
+        f"{vf.filler_paragraph()}\n\nReviewed and approved by {wrapped}.\n"
     )
     path.write_text(text, encoding="utf-8", newline="\n")
     return entries

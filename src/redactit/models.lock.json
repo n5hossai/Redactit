@@ -1,0 +1,12 @@
+{
+  "gliner/model.onnx": {
+    "url": "https://huggingface.co/knowledgator/gliner-pii-base-v1.0/resolve/61726e0ad791dcab3e29339bbec3ad42ded65641/onnx/model.onnx",
+    "sha256": "c6ccec44625d46bfe3191152e41d6564b69bc9d4313b7f3e419e8372679e9fed",
+    "license": "Apache-2.0"
+  },
+  "gliner/tokenizer.json": {
+    "url": "https://huggingface.co/knowledgator/gliner-pii-base-v1.0/resolve/61726e0ad791dcab3e29339bbec3ad42ded65641/tokenizer.json",
+    "sha256": "ee028763434d18611c1c36356ea1d050e90a9fa94ede57fac48b39f85f818ad1",
+    "license": "Apache-2.0"
+  }
+}
