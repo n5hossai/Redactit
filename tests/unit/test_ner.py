@@ -10,7 +10,7 @@ try:
 except models.ModelError:
     pytest.skip("models not installed; run `redactit setup-models`", allow_module_level=True)
 
-from redactit.detect.ner import GlinerNer  # noqa: E402
+from redactit.detect.ner import WORD, GlinerNer  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -24,6 +24,16 @@ def test_finds_people_and_addresses(ner):
     assert ("PERSON", "Priya Okafor") in found
     assert ("PERSON", "Siobhan O'Brien") in found
     assert ("ADDRESS", "217 Davis Point Apt. 431, Philipport, VT 68945") in found
+
+
+def test_a_name_ocr_glued_to_the_word_before_is_found(ner):
+    text = "Chat withJenniferRice"
+    assert any(s.entity_type == "PERSON" and text[s.start:s.end] == "JenniferRice" for s in ner.detect(text))
+
+
+def test_only_a_lower_to_upper_case_change_splits_a_word():
+    words = [m.group() for m in WORD.finditer("withJenniferRice abc123 USNS Jean-Luc")]
+    assert words == ["with", "Jennifer", "Rice", "abc123", "USNS", "Jean-Luc"]
 
 
 def test_long_text_is_windowed_without_losing_entities(ner):
