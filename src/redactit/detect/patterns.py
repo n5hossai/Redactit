@@ -36,6 +36,21 @@ MASTERCARD_2_SERIES = Pattern(
 )
 
 
+class WrappedCardRecognizer(PatternRecognizer):
+    """A card number broken across one line break, as PDF text layers and OCR produce when
+    a line wraps mid-number. Presidio's card patterns stop at the break; Luhn still applies.
+    """
+
+    PATTERNS = [Pattern("Card across a line break", r"\b(?:\d[ -]?){4,15}\r?\n[^\S\n]*(?:\d[ -]?){2,15}\d\b", 0.8)]
+
+    def __init__(self) -> None:
+        super().__init__(supported_entity="CREDIT_CARD", patterns=self.PATTERNS, name="wrapped_card_pattern")
+
+    def validate_result(self, pattern_text: str) -> bool:
+        digits = re.sub(r"\D", "", pattern_text)
+        return 13 <= len(digits) <= 19 and _luhn_ok(digits)
+
+
 def _recognizer(entity: str, patterns: list[Pattern], flags=re.MULTILINE) -> PatternRecognizer:
     # A distinct name per entity, so the audit log can tell which recogniser fired.
     return PatternRecognizer(supported_entity=entity, patterns=patterns, global_regex_flags=flags,

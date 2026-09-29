@@ -445,3 +445,16 @@ def test_po_boxes_and_numbered_units(det, addr):
 def test_each_pattern_recognizer_has_its_own_name(det):
     spans = det.detect("Mail a@b.co or call 202-555-0147.")
     assert {s.detector.split(".")[0] for s in spans} >= {"email_pattern", "phone_pattern"}
+
+
+@pytest.mark.parametrize("text, card", [
+    ("Card on file: 3724180\r\n57889143", "3724180\r\n57889143"),
+    ("Card: 4111 1111\n1111 1111 thanks", "4111 1111\n1111 1111"),
+])
+def test_card_numbers_wrapped_across_a_line(det, text, card):
+    spans = [s for s in _spans_of(det, text, "CREDIT_CARD") if s.validated]
+    assert _covers(spans, text, card)
+
+
+def test_wrapped_digits_that_fail_luhn_are_not_cards(det):
+    assert not [s for s in _spans_of(det, "Order 1234567\n12345678", "CREDIT_CARD") if s.validated]
