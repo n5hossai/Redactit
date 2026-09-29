@@ -54,3 +54,32 @@ def test_files_that_are_not_word_documents_are_refused():
         docx_to_markdown(b"plain text, not a zip")
     with pytest.raises(DocxError, match="document.xml"):
         docx_to_markdown(_docx({"word/styles.xml": "<s/>"}))
+
+
+W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+DOC = f'<w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>Hi</w:t></w:r></w:p></w:body></w:document>'
+
+
+def test_runs_in_other_parts_stay_joined():
+    a = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    smartart = (f'<dgm:dataModel xmlns:dgm="urn:d" xmlns:a="{a}"><a:p><a:r><a:t>priya.okafor@</a:t></a:r>'
+                '<a:r><a:t>northwind.com</a:t></a:r></a:p></dgm:dataModel>')
+    md = docx_to_markdown(_docx({"word/document.xml": DOC, "word/diagrams/data1.xml": smartart}))
+    assert "priya.okafor@northwind.com" in md
+
+
+def test_any_dtd_is_refused():
+    with pytest.raises(DocxError):
+        docx_to_markdown(_docx({"word/document.xml": '<?xml version="1.0"?><!DOCTYPE d []>' + DOC}))
+
+
+def test_deep_nesting_is_refused_cleanly():
+    deep = f'<w:document xmlns:w="{W_NS}"><w:body>' + "<w:sdt>" * 3000 + "</w:sdt>" * 3000 + "</w:body></w:document>"
+    with pytest.raises(DocxError):
+        docx_to_markdown(_docx({"word/document.xml": deep}))
+
+
+def test_strict_open_xml_is_refused_not_emptied():
+    strict = DOC.replace(W_NS, "http://purl.oclc.org/ooxml/wordprocessingml/main")
+    with pytest.raises(DocxError, match="Strict"):
+        docx_to_markdown(_docx({"word/document.xml": strict}))

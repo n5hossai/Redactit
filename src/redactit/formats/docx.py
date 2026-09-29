@@ -32,6 +32,16 @@ def docx_to_markdown(data: bytes) -> str:
     parts = _read_parts(data)
     if "word/document.xml" not in parts:
         raise DocxError("not a Word document: word/document.xml is missing")
+    if not parts["word/document.xml"].tag.startswith(W):
+        # Strict OOXML uses another namespace; reading it with this one would yield nothing.
+        raise DocxError("Strict Open XML documents are not supported; save as a standard .docx")
+    try:
+        return _markdown(parts)
+    except RecursionError as e:  # a crafted file nested thousands of elements deep
+        raise DocxError("refusing a document nested too deeply") from e
+
+
+def _markdown(parts: dict) -> str:
     by_name = lambda pattern: [parts[n] for n in sorted(parts) if re.fullmatch(pattern, n)]  # noqa: E731
     sections = {
         "Body": _blocks(parts["word/document.xml"]),
@@ -45,7 +55,7 @@ def docx_to_markdown(data: bytes) -> str:
         "Authors": [", ".join(sorted({v for root in parts.values() for el in root.iter()
                                       for k, v in el.attrib.items() if k.endswith("}author") and v}))],
         "Other text": [t for name, root in parts.items() if not _HANDLED.match(name) and not _NO_TEXT.match(name)
-                       for t in [" ".join(s.strip() for s in root.itertext() if s.strip())] if t],
+                       for t in [_other_text(root)] if t],
     }
     return "\n\n".join(f"## {title}\n\n" + "\n\n".join(lines) for title, lines in sections.items()
                        if any(line.strip() for line in lines)) + "\n"
@@ -60,10 +70,24 @@ def _read_parts(data: bytes) -> dict:
     if len(z.infolist()) > MAX_PARTS or sum(i.file_size for i in infos) > MAX_UNCOMPRESSED:
         raise DocxError("refusing an oversized or suspicious package")
     try:
-        # defusedxml refuses DTDs and entity expansion (billion-laughs attacks).
-        return {i.filename: ElementTree.fromstring(z.read(i)) for i in infos if i.filename.startswith(("word/", "customXml/"))}
+        # Word never needs a DTD, so any is refused, along with entity expansion (billion laughs).
+        return {i.filename: ElementTree.fromstring(z.read(i), forbid_dtd=True)
+                for i in infos if i.filename.startswith(("word/", "customXml/"))}
     except Exception as e:  # malformed XML or a forbidden construct
         raise DocxError(f"unreadable Word XML ({type(e).__name__})") from e
+
+
+def _other_text(root) -> str:
+    """Text of any other content part, one line per paragraph with its runs joined.
+
+    Joining every text node with a space once split "priya.okafor@" + "northwind.com" across
+    two SmartArt runs, which no detector then matched. Parts with no paragraphs (custom XML)
+    hold separate fields, so those are joined with spaces.
+    """
+    paragraphs = [el for el in root.iter() if el.tag.rsplit("}", 1)[-1] == "p"]
+    if paragraphs:
+        return "\n".join(t for t in ("".join(p.itertext()).strip() for p in paragraphs) if t)
+    return " ".join(s.strip() for s in root.itertext() if s.strip())
 
 
 def _blocks(el) -> list[str]:
