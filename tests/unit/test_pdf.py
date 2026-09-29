@@ -62,3 +62,50 @@ def test_page_count_is_capped(engine, monkeypatch):
     monkeypatch.setattr(pdf_format, "MAX_PAGES", 1)
     with pytest.raises(PdfError, match="pages"):
         redact_pdf(_pdf([["one"], ["two"]]), engine, scope="t")
+
+
+def _page(draw, rotation=0, cropbox=None) -> bytes:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf)
+    if rotation:
+        c.setPageRotation(rotation)
+    if cropbox:
+        c.setCropBox(cropbox)
+    draw(c)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def _visible(out: bytes) -> str:
+    doc = pdfium.PdfDocument(out)
+    return leak.normalize(" ".join(leak._ocr(p.render(scale=300 / 72).to_pil(), rotations=(0, 90, 270)) for p in doc))
+
+
+@pytest.mark.parametrize("rotation, cropbox", [(90, None), (270, None), (0, (100, 100, 500, 800))],
+                         ids=["rotated 90", "rotated 270", "cropped"])
+def test_boxes_land_on_the_text_of_rotated_and_cropped_pages(engine, rotation, cropbox):
+    def draw(c):
+        c.setFont("Helvetica", 11)
+        c.drawString(150, 500, "Contact Priya Okafor at priya.okafor@corp.local")
+    out, _ = redact_pdf(_page(draw, rotation, cropbox), engine, scope="t")
+    seen = _visible(out)
+    assert "okafor" not in seen and "priya" not in seen
+
+
+def test_text_hidden_under_a_drawn_box_does_not_reach_the_markdown(engine):
+    def draw(c):
+        c.drawString(72, 700, "Case notes for review")
+        c.drawString(72, 650, "Secret client Dmitri Volkov")
+        c.rect(60, 640, 400, 25, fill=1)  # a cosmetic "redaction" drawn over the text
+    _, markdown = redact_pdf(_page(draw), engine, scope="t")
+    assert "Volkov" not in markdown and "Case notes" in markdown
+
+
+def test_oversized_pages_are_refused(engine):
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(9000, 9000))  # ~780 MP at 200 DPI, from a tiny file
+    c.drawString(72, 72, "x")
+    c.save()
+    with pytest.raises(PdfError, match="too large"):
+        redact_pdf(buf.getvalue(), engine, scope="t")

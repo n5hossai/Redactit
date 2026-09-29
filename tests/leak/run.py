@@ -37,7 +37,7 @@ NOT_NAME_PARTS = {"mr", "mrs", "ms", "miss", "dr", "jr", "sr", "md", "phd", "dds
 # OCR confuses these pairs; folding both sides stops a misread digit from hiding a leak.
 OCR_FOLD = str.maketrans("oilsb", "01158")
 # PDF info keys that name the producing tool or a time, never the document's subject.
-HARMLESS_PDF_META = {"Producer", "CreationDate", "ModDate"}
+HARMLESS_PDF_META = {"Producer", "Creator", "CreationDate", "ModDate"}  # tool names and times; values in them are still matched
 FACE_MODEL = "yunet/face_detection_yunet_2023mar.onnx"
 FACE_MIN_SCORE = 0.6  # deliberately low: a face scored just under a redactor's cut-off is still a face
 
