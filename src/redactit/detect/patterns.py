@@ -213,7 +213,9 @@ _UNIT_AFTER = r"(?:,?[^\S\n]*(?:Apt|Apartment|Suite|Ste|Unit|Flat|#)\.?[^\S\n]*[
 _TAIL = _UNIT_AFTER + r"(?:,[^\S\n]*[^,\n.;:!?]{2,40}){0,4}"
 # Up to three comma-separated parts before a postcode; a part may end a line, since PDFs
 # and hard-wrapped text break addresses after a comma ("2 Josh Plains," / "Vanessafort, S6 5WJ").
-_BEFORE = r"(?:[^,\n.;:!?|]{2,40},\s*){0,3}(?:[^,\n.;:!?|]{0,30}[^\S\n]?)?"  # OCR may glue "SKR3P1B2"
+# A part may hold one line break: generators and narrow columns wrap mid-word ("Va" / "nessafort").
+_PART = r"[^,\n.;:!?|]{0,40}(?:\n[^,\n.;:!?|]{0,40})?"
+_BEFORE = rf"(?:{_PART},\s*){{0,3}}(?:{_PART}[^\S\n]?)?"  # OCR may glue the last part on ("SKR3P1B2")
 _D4 = r"\d(?:\s*\d){3}"  # four digits, possibly broken by a line wrap
 ADDRESS = _recognizer("ADDRESS", [
     Pattern("Street, number first",

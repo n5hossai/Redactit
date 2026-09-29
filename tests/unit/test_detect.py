@@ -489,6 +489,7 @@ def test_a_glued_iban_is_only_validated_when_it_passes_mod97(det):
 @pytest.mark.parametrize("text, addr", [
     ("Address: 2 Josh Plains, \r\nVanessafort, S6 5WJ", "2 Josh Plains, \r\nVanessafort, S6 5WJ"),
     ("1678WallerInlet,EastMatthew,SKR3P1B2", "1678WallerInlet,EastMatthew,SKR3P1B2"),
+    ("Address: 2 Josh Plains, Va\r\nnessafort, S6 5WJ", "2 Josh Plains, Va\r\nnessafort, S6 5WJ"),  # mid-word wrap
     ("Address: PSC 6319, Box 47\r\n75, APO AP 11657", "PSC 6319, Box 47\r\n75, APO AP 11657"),
 ])
 def test_addresses_wrapped_or_glued_by_ocr(det, text, addr):
