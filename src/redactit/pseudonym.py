@@ -23,23 +23,19 @@ class Pseudonymizer:
 
 
 def replacements(text: str, decisions: list[Decision], pz: Pseudonymizer) -> list[str]:
-    """The replacement for each decision (sorted by start), computed in reading order so
-    [PERSON_1] is the first person mentioned. Images and PDFs label their boxes with these."""
-    return [_replacement(d, text[d.span.start:d.span.end], pz) for d in sorted(decisions, key=lambda d: d.span.start)]
+    """The replacement for each decision. `decisions` must be sorted by start (the engine
+    sorts them once): labels are numbered in that order, so [PERSON_1] is the first person
+    mentioned. Images and PDFs label their boxes with these."""
+    return [_replacement(d, text[d.span.start:d.span.end], pz) for d in decisions]
 
 
 def splice(text: str, decisions: list[Decision], subs: list[str]) -> str:
-    """`text` with each decision's span (sorted by start) replaced by its substitute."""
+    """`text` with each decision's span (sorted by start, not overlapping) replaced by its substitute."""
     out, pos = [], 0
-    for d, sub in zip(sorted(decisions, key=lambda d: d.span.start), subs):
+    for d, sub in zip(decisions, subs):
         out.append(text[pos:d.span.start] + sub)
         pos = d.span.end
     return "".join(out) + text[pos:]
-
-
-def apply(text: str, decisions: list[Decision], pz: Pseudonymizer) -> str:
-    """Apply each decision's action to `text`."""
-    return splice(text, decisions, replacements(text, decisions, pz))
 
 
 def _replacement(d: Decision, original: str, pz: Pseudonymizer) -> str:

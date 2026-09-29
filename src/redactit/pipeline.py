@@ -28,14 +28,15 @@ class Engine:
         safety.block_network()  # here, not only in the CLI, so every interface runs behind it
         self.policy, self.vault, self.audit = policy, vault, audit
         self.detector = Detector(company_terms=policy.company_terms())
-        self.ner = GlinerNer(models.path_for("gliner/model.onnx"), models.path_for("gliner/tokenizer.json"))
+        # Every pinned file is hash-checked here, once: hashing the NER model takes about a second.
+        paths = {name: models.path_for(name) for name in models.LOCK}
+        self.ner = GlinerNer(paths["gliner/model.onnx"], paths["gliner/tokenizer.json"])
         purged = vault.purge(policy.vault.retention_days)
         if audit:
             audit.write("engine_start", version=__version__)
             audit.write("policy_loaded", dial=policy.effective_dial(), admin_floor=policy.dial.admin_floor,
                         entity_count=len(policy.entities), locked_count=sum(e.locked for e in policy.entities.values()))
-            for name, pin in models.LOCK.items():
-                models.path_for(name)  # hash-check every pinned file, so the event below is true
+            for name, pin in models.LOCK.items():  # all verified above, so each event is true
                 audit.write("model_verified", model=name.replace("/", ".").lower(),
                             revision=pin["url"].split("/resolve/")[1].split("/")[0], sha256=pin["sha256"])
             audit.write("vault_purge", purged_count=purged, retention_days=policy.vault.retention_days)
@@ -46,7 +47,7 @@ class Engine:
         clean, where = _canonical(text)
         spans = _join_address_fragments(clean, self.detector.detect(clean) + self.ner.detect(clean))
         decisions = [_to_source(d, where) for d in self.policy.decide(clean, spans, site)]
-        decisions.sort(key=lambda d: d.span.start)
+        decisions.sort(key=lambda d: d.span.start)  # the order replacements() numbers labels in
         subs = replacements(text, decisions, Pseudonymizer(self.vault, scope))
         result = Result(splice(text, decisions, subs), decisions, subs)
         if self.audit:

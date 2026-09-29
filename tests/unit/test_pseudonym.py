@@ -1,8 +1,8 @@
-"""Pseudonymizer labels and apply()'s right-to-left splice of policy decisions."""
+"""Pseudonymizer labels, and each action's replacement spliced into the text."""
 
 from __future__ import annotations
 
-from redactit.pseudonym import Pseudonymizer, apply
+from redactit.pseudonym import Pseudonymizer, replacements, splice
 from redactit.types import Decision, Span
 from redactit.vault import Vault
 
@@ -33,6 +33,10 @@ def test_different_scopes_are_independent(tmp_path):
     assert a.label("PERSON", "Priya Okafor") == "[PERSON_1]"
     assert b.label("PERSON", "Jordan Page") == "[PERSON_1]"
     assert a.label("PERSON", "Jordan Page") == "[PERSON_2]"
+
+
+def apply(text, decisions, pz) -> str:
+    return splice(text, decisions, replacements(text, decisions, pz))
 
 
 def _decision(start, end, entity_type, action) -> Decision:
@@ -69,7 +73,7 @@ def test_apply_omit_removes_the_value(tmp_path):
     assert apply(text, decisions, pz) == "note:  end"
 
 
-def test_apply_is_right_to_left_so_earlier_offsets_stay_valid(tmp_path):
+def test_every_offset_indexes_the_original_text(tmp_path):
     pz = Pseudonymizer(_vault(tmp_path), scope="chat-1")
     text = "Priya Okafor emailed priya@example.com"
     decisions = [
@@ -80,10 +84,6 @@ def test_apply_is_right_to_left_so_earlier_offsets_stay_valid(tmp_path):
 
 
 def test_pseudonyms_number_in_reading_order(tmp_path):
-    from redactit.pseudonym import Pseudonymizer, apply
-    from redactit.types import Decision, Span
-    from redactit.vault import Vault
-
     text = "Ann met Bob."
     ds = [Decision(Span(0, 3, "PERSON", 0.9, "t"), "pseudonymize", "entities.PERSON", "r"),
           Decision(Span(8, 11, "PERSON", 0.9, "t"), "pseudonymize", "entities.PERSON", "r")]
