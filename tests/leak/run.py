@@ -3,12 +3,13 @@
     uv run python tests/leak/run.py --corpus tests/corpus/out --outputs <dir>
 
 <dir> mirrors the corpus layout. Every file under <dir> whose path starts with an input's
-path minus its extension counts as that input's output: `docx/a.docx` -> `docx/a.md`.
+path minus its extension counts as that input's output: `docx/a.docx` -> `docx/a.docx.md`.
 Pointing --outputs at the corpus itself runs the "redactor that changes nothing" and must
 report 0% recall; that run proves the harness can see leaks.
 
 The verifier is deliberately independent of the redactor: it renders PDFs at 300 DPI,
-OCRs images at two scales and three rotations, decodes barcodes, looks for faces with
+OCRs pages and images at full size in three rotations (small images also at 2x), decodes
+barcodes, looks for faces with
 YuNet (needs the models from `redactit setup-models`), dumps metadata, and also searches
 raw bytes. A leak only one of these paths can see still counts.
 
@@ -36,6 +37,10 @@ TEXT_SUFFIXES = {".txt", ".md", ".json", ".csv"}
 NOT_NAME_PARTS = {"mr", "mrs", "ms", "miss", "dr", "jr", "sr", "md", "phd", "dds", "dvm", "ii", "iii", "iv"}
 # OCR confuses these pairs; folding both sides stops a misread digit from hiding a leak.
 OCR_FOLD = str.maketrans("oilsb", "01158")
+# RapidOCR first shrinks anything longer than this. Its default, 2000, blurred the small text
+# of a 4K screenshot or a 300 DPI page past reading, so a leak there went unseen.
+OCR_MAX_SIDE = 8192
+UPSCALE_MAX = 2048  # images up to this side are also read at 2x
 # PDF info keys that name the producing tool or a time, never the document's subject.
 HARMLESS_PDF_META = {"Producer", "Creator", "CreationDate", "ModDate"}  # tool names and times; values in them are still matched
 FACE_MODEL = "yunet/face_detection_yunet_2023mar.onnx"
@@ -196,7 +201,8 @@ def _pdf_text(data: bytes, problems: list[str]) -> dict[str, str]:
     layer, ocr = [], []
     for page in pdf:
         layer.append(page.get_textpage().get_text_range())
-        ocr.append(_ocr(page.render(scale=300 / 72).to_pil(), rotations=(0,)))
+        # Every rotation: text on a /Rotate'd page or drawn sideways reads as noise upright.
+        ocr.append(_ocr(page.render(scale=300 / 72).to_pil(), rotations=(0, 90, 270)))
     meta = {k: v for k, v in pdf.get_metadata_dict().items() if v and k not in HARMLESS_PDF_META}
     # Redacted PDFs are rebuilt from images, so any text layer or subject metadata means
     # the rebuild did not happen, even when no seeded value is in it.
@@ -217,6 +223,7 @@ def _face_scores(img) -> list[float]:
     import numpy as np
     from redactit.models import path_for
 
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)  # OpenCV 5 warns on every create()
     bgr = cv2.cvtColor(np.asarray(img.convert("RGB")), cv2.COLOR_RGB2BGR)
     h, w = bgr.shape[:2]
     detector = cv2.FaceDetectorYN.create(str(path_for(FACE_MODEL)), "", (w, h), FACE_MIN_SCORE, 0.3, 5000)
@@ -238,10 +245,11 @@ def _image_text(img, problems: list[str]) -> dict[str, str]:
     # failed, even when no seeded value is in it (GPS coordinates are never seeded).
     if meta:
         problems.append("image metadata present")
-    # 2x upscale helps the detector with small or thin glyphs that 1x misses.
-    big = img.resize((img.width * 2, img.height * 2))
+    # 2x upscale helps the detector with small or thin glyphs that 1x misses. Large images
+    # are already read at full size, and doubling a 4K screenshot costs gigabytes.
+    big = img.resize((img.width * 2, img.height * 2)) if max(img.size) <= UPSCALE_MAX else None
     return {
-        "image_ocr": _ocr(img, rotations=(0, 90, 270)) + "\n" + _ocr(big, rotations=(0,)),
+        "image_ocr": _ocr(img, rotations=(0, 90, 270)) + "\n" + (_ocr(big, rotations=(0,)) if big else ""),
         "barcode": " ".join(r.text for r in zxingcpp.read_barcodes(img)),
         "image_meta": " ".join(meta),
     }
@@ -256,7 +264,7 @@ def _ocr(img, rotations) -> str:
     import numpy as np
     from rapidocr_onnxruntime import RapidOCR
 
-    _OCR = _OCR or RapidOCR()
+    _OCR = _OCR or RapidOCR(max_side_len=OCR_MAX_SIDE)
     lines = []
     for angle in rotations:
         result, _ = _OCR(np.asarray(img.convert("RGB").rotate(angle, expand=True)))
