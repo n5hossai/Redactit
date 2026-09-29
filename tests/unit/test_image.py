@@ -276,3 +276,9 @@ def test_every_detected_face_is_covered(path, engine):
         pytest.skip("YuNet finds no face in this fixture")
     out, _, _ = redact_image(data, engine[0], "t")
     assert _faces(out) == 0
+
+
+def test_formats_outside_the_allowlist_are_refused(engine):
+    eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\nshowpage\n"
+    with pytest.raises(ImageError):
+        redact_image(eps, engine, "s")

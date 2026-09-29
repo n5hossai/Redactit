@@ -92,7 +92,10 @@ def redact_image(data: bytes, engine, scope: str, *, destination: str = "cli") -
 def _load(data: bytes) -> tuple[Image.Image, str]:
     """Decode with the EXIF orientation applied, as RGB, plus the format to write it back in."""
     try:
-        img = Image.open(io.BytesIO(data))
+        # An allowlist, not content sniffing alone: EPS would run Ghostscript (AGPL) through a
+        # temp file, and WMF/EMF render through the OS. JPEG also opens phones' MPO files.
+        Image.init()  # registers WEBP and TIFF, which the allowlist lookup needs
+        img = Image.open(io.BytesIO(data), formats=("PNG", "JPEG", "WEBP", "BMP", "GIF", "TIFF"))
     except (OSError, Image.DecompressionBombError):
         raise ImageError("the file is not a readable image") from None
     if img.width * img.height > MAX_PIXELS:
