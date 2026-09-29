@@ -13,7 +13,10 @@ from PIL import Image, ImageDraw
 Quad = tuple[tuple[float, float], ...]
 
 TURNS = (1, 2, 3)  # quarter turns tried after the upright read, so text at any orientation reads upright once
-UPSCALE, MAX_SIDE = 2.0, 2000  # RapidOCR shrinks anything longer than MAX_SIDE, which would undo an upscale
+# RapidOCR shrinks anything longer than MAX_SIDE before reading it: at 2000 px a 4K screenshot's
+# 14 px text became unreadable and survived. Images past MAX_SIDE are read in overlapping tiles.
+MAX_SIDE, TILE_OVERLAP = 4096, 512
+UPSCALE, UPSCALE_SIDE = 2.0, 2000  # the upscale pass is for small images only; it stops at UPSCALE_SIDE
 MIN_UPSCALE = 1.25  # a smaller gain is not worth another pass
 CONFIDENT = 0.9  # a read this sure of itself is not read again at another orientation or scale
 ASPECT = 4  # RapidOCR scales a thin image to a 736 px short side: slow at 8:1, and its resize fails near 100:1
@@ -39,6 +42,24 @@ def _engine():
 def read_lines(img: Image.Image) -> list[Line]:
     """Every text line in the image, including text turned 90, 180 or 270 degrees and small text."""
     rgb = img if img.mode == "RGB" else img.convert("RGB")
+    found = [(score, _shift(line, x, y)) for (x, y), tile in _tiles(rgb) for score, line in _read_view(tile)]
+    return _reading_order(_merge(found))
+
+
+def _tiles(img: Image.Image):
+    """(offset, crop) pieces no longer than MAX_SIDE, overlapping so a line cut by one edge is whole in the next."""
+    step = MAX_SIDE - TILE_OVERLAP
+    starts = lambda size: sorted({*range(0, max(size - MAX_SIDE, 0), step), max(size - MAX_SIDE, 0)})  # noqa: E731
+    for y in starts(img.height):
+        for x in starts(img.width):
+            yield (x, y), img.crop((x, y, min(x + MAX_SIDE, img.width), min(y + MAX_SIDE, img.height)))
+
+
+def _shift(line: Line, dx: float, dy: float) -> Line:
+    return Line(line.text, tuple((x + dx, y + dy) for x, y in line.quad), line.cuts)
+
+
+def _read_view(rgb: Image.Image) -> list[tuple[float, Line]]:
     found = _read(rgb, 0, 1.0)
     # The other passes only need what this one could not read, so upright lines it read with
     # confidence are painted out: reading every line again at every orientation and scale is
@@ -46,11 +67,11 @@ def read_lines(img: Image.Image) -> list[Line]:
     sure = [line for score, line in found if score >= CONFIDENT and len(line.text) >= 3 and _upright(line)]
     left = _erase(rgb, sure)
     found += [line for turns in TURNS for line in _read(left, turns, 1.0)]
-    scale = min(UPSCALE, MAX_SIDE / max(rgb.size))
+    scale = min(UPSCALE, UPSCALE_SIDE / max(rgb.size))
     if scale >= MIN_UPSCALE:  # only the upright read is upscaled: rotated small text is rare
         big = left.resize((round(rgb.width * scale), round(rgb.height * scale)), Image.Resampling.BICUBIC)
         found += _read(big, 0, scale)
-    return _reading_order(_merge(found))
+    return found
 
 
 def _upright(line: Line) -> bool:
