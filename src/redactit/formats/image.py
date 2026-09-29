@@ -120,6 +120,8 @@ def _rect(x: float, y: float, w: float, h: float) -> Quad:
 def _faces(rgb: Image.Image) -> list[Box]:
     import cv2
 
+    # Errors only: OpenCV 5 warns on every create() that DNN targets are ignored.
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
     # Built per call, not cached: its buffers grow with the input and a 50 MP photo would keep gigabytes.
     scale = min(1.0, FACE_MAX_SIDE / max(rgb.size))
     small = rgb if scale == 1 else rgb.resize((round(rgb.width * scale), round(rgb.height * scale)))
