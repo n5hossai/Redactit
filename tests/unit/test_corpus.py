@@ -74,8 +74,11 @@ def test_pdf_text_layer(corpus):
     for doc in manifest["documents"]:
         if doc["format"] != "pdf":
             continue
-        pdf = pdfium.PdfDocument(str(out / doc["file"]))
-        text = pdf[0].get_textpage().get_text_range()
+        page = pdfium.PdfDocument(str(out / doc["file"]))[0]
+        # Only text inside the shown area counts: a value drawn off the page (a turned page's
+        # MediaBox is landscape) is in the text layer but on no rendered pixel, so the leak
+        # test would pass it without ever checking it.
+        text = page.get_textpage().get_text_bounded(*page.get_cropbox())
 
         if doc["variant"] == "scanned":
             assert text == ""

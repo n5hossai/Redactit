@@ -106,8 +106,9 @@ def build_pdf(variant: str, vf, path: Path) -> list[dict]:
         phone = _seed(entries, "PHONE", vf.phone(), "text_layer")
         email = _seed(entries, "EMAIL", vf.email(), "text_layer")
         c.setFont("Helvetica", 12)
+        # reportlab lays a turned page out landscape (MediaBox 792 x 612): y must stay under 612.
         for i, line in enumerate([vf.filler_sentence(), f"Name: {person}", f"Phone: {phone}", f"Email: {email}"]):
-            c.drawString(72, height - 72 - 18 * i, line)
+            c.drawString(72, width - 72 - 18 * i, line)
 
     elif variant == "cropped":
         # A CropBox shows only part of the page, so page space and shown pixels differ by its origin.
