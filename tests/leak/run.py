@@ -8,11 +8,12 @@ Pointing --outputs at the corpus itself runs the "redactor that changes nothing"
 report 0% recall; that run proves the harness can see leaks.
 
 The verifier is deliberately independent of the redactor: it renders PDFs at 300 DPI,
-OCRs images at two scales and three rotations, decodes barcodes, dumps metadata, and also
-searches raw bytes. A leak only one of these paths can see still counts.
+OCRs images at two scales and three rotations, decodes barcodes, looks for faces with
+YuNet (needs the models from `redactit setup-models`), dumps metadata, and also searches
+raw bytes. A leak only one of these paths can see still counts.
 
 Exit code 1 if any seeded value (or an identifying part of one) survives, if an output
-still carries metadata or a PDF text layer, or if nothing was checked at all.
+still carries metadata, a face or a PDF text layer, or if nothing was checked at all.
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ NOT_NAME_PARTS = {"mr", "mrs", "ms", "miss", "dr", "jr", "sr", "md", "phd", "dds
 OCR_FOLD = str.maketrans("oilsb", "01158")
 # PDF info keys that name the producing tool or a time, never the document's subject.
 HARMLESS_PDF_META = {"Producer", "CreationDate", "ModDate"}
+FACE_MODEL = "yunet/face_detection_yunet_2023mar.onnx"
+FACE_MIN_SCORE = 0.6  # deliberately low: a face scored just under a redactor's cut-off is still a face
 
 
 def _canon(text: str) -> str:
@@ -204,9 +207,28 @@ def _pdf_text(data: bytes, problems: list[str]) -> dict[str, str]:
     return {"pdf_text_layer": "\n".join(layer), "pdf_ocr": "\n".join(ocr), "pdf_meta": " ".join(meta.values())}
 
 
+def _face_scores(img) -> list[float]:
+    """YuNet scores of the faces in `img` at or above FACE_MIN_SCORE.
+
+    A missing or mismatched model raises ModelError ("run `redactit setup-models`"): a leak
+    test that silently skipped faces would report success on an image with a face in it.
+    """
+    import cv2
+    import numpy as np
+    from redactit.models import path_for
+
+    bgr = cv2.cvtColor(np.asarray(img.convert("RGB")), cv2.COLOR_RGB2BGR)
+    h, w = bgr.shape[:2]
+    detector = cv2.FaceDetectorYN.create(str(path_for(FACE_MODEL)), "", (w, h), FACE_MIN_SCORE, 0.3, 5000)
+    _, faces = detector.detect(bgr)
+    return [] if faces is None else [float(f[-1]) for f in faces]
+
+
 def _image_text(img, problems: list[str]) -> dict[str, str]:
     import zxingcpp
 
+    if _face_scores(img):
+        problems.append("face present")
     exif = img.getexif()
     meta = [str(v) for v in exif.values()] + [str(v) for v in exif.get_ifd(0x8825).values()]  # + GPS IFD
     meta += [str(v) for v in getattr(img, "text", {}).values()]  # PNG text chunks
@@ -262,16 +284,20 @@ def run(corpus: Path, outputs: Path, spans_file: Path | None, formats: set[str] 
         outs = outputs_for(doc["file"], outputs)
         if not outs:
             missing.append(doc["file"])  # no output means nothing was checked: fail loud
-        compact, spaced = {}, {}
+        compact, spaced, found = {}, {}, set()  # found: every problem any output of this input showed
         for o in outs:
             sources, problems = extract(o)
+            found.update(problems)
             violations += [{"file": doc["file"], "output": o.name, "problem": p} for p in problems]
             for src, text in sources.items():
                 compact[f"{o.name}:{src}"], spaced[f"{o.name}:{src}"] = normalize(text), words(text)
         for s in doc["seeded"]:
             key = (doc["format"], s["entity_type"])
             per[key]["seeded"] += 1
-            hits = found_in(s["entity_type"], s["value"], compact, spaced)
+            if s["entity_type"] == "FACE":  # no text to match: the detector's verdict is the evidence
+                hits = ["face present"] if "face present" in found else []
+            else:
+                hits = found_in(s["entity_type"], s["value"], compact, spaced)
             if hits or not outs:
                 survivors.append({**s, "file": doc["file"], "found_in": hits or ["<no output>"]})
             else:

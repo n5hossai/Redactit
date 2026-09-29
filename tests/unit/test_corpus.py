@@ -16,6 +16,7 @@ import pypdfium2 as pdfium
 import pytest
 
 import generate as gen
+from corpus_media import FACES
 
 SEED = 42
 PER_VARIANT = 1
@@ -116,3 +117,13 @@ def test_manifest_schema(corpus):
             assert e["id"] not in seen_ids
             seen_ids.add(e["id"])
     assert (out / "company_terms.txt").is_file()
+
+
+def test_every_image_seeds_one_face_from_the_fixtures(corpus):
+    _, manifest = corpus
+    fixtures = {p.name for p in FACES.glob("*.jpg")}
+    images = [d for d in manifest["documents"] if d["format"] in ("png", "jpg")]
+    assert images and fixtures
+    for doc in images:
+        faces = [(e["location"], e["value"] in fixtures) for e in doc["seeded"] if e["entity_type"] == "FACE"]
+        assert faces == [("face", True)], doc["file"]
