@@ -494,3 +494,12 @@ def test_a_glued_iban_is_only_validated_when_it_passes_mod97(det):
 ])
 def test_addresses_wrapped_or_glued_by_ocr(det, text, addr):
     assert _covers(_spans_of(det, text, "ADDRESS"), text, addr)
+
+
+def test_an_iban_in_printed_groups_is_covered_whole(det):
+    text = "IBANGB82 WEST 1234 5698 7654 32 thanks"
+    assert _covers(_spans_of(det, text, "IBAN"), text, "GB82 WEST 1234 5698 7654 32")
+
+
+def test_lower_case_passport_letters_must_start_a_word(det):
+    assert not _spans_of(det, "Deadline 20240315 for the report", "PASSPORT")

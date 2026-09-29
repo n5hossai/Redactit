@@ -89,15 +89,28 @@ class GluedIbanRecognizer(EntityRecognizer):
     def analyze(self, text: str, entities, nlp_artifacts=None) -> list[RecognizerResult]:
         results = []
         for m in re.finditer(r"(?=([A-Z]{2})\d{2})", text):
-            n = IBAN_LENGTHS.get(m.group(1), 0)
-            candidate = text[m.start():m.start() + n]
-            if n and len(candidate) == n and re.fullmatch(r"[A-Z0-9]+", candidate):
+            end = _take_iban_chars(text, m.start(), IBAN_LENGTHS.get(m.group(1), 0))
+            if end:
                 # A checksum pass is certain. An IBAN-shaped string that fails it is most often
                 # an OCR misread (O for 0), and IBAN is locked, so it is masked either way.
-                score = 1.0 if _iban_ok(candidate) else 0.6
-                results.append(RecognizerResult("IBAN", m.start(), m.start() + n, score,
+                score = 1.0 if _iban_ok(text[m.start():end].replace(" ", "")) else 0.6
+                results.append(RecognizerResult("IBAN", m.start(), end, score,
                                                 recognition_metadata={RecognizerResult.RECOGNIZER_NAME_KEY: self.name}))
         return results
+
+
+def _take_iban_chars(text: str, start: int, n: int) -> int:
+    """End of the n-th capital letter or digit from `start`, with single spaces allowed between
+    them (printed IBANs group by four: "GB82 WEST 1234 ..."); 0 if anything else comes first."""
+    count, i = 0, start
+    while n and i < len(text) and count < n:
+        ch = text[i]
+        if ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789":
+            count += 1
+        elif ch != " " or text[i - 1] == " ":
+            return 0
+        i += 1
+    return i if n and count == n else 0
 
 
 def _recognizer(entity: str, patterns: list[Pattern], flags=re.MULTILINE) -> PatternRecognizer:
@@ -159,7 +172,9 @@ UK_NINO = _recognizer("UK_NINO", [Pattern(
 # the lettered form scores above zero on its own; the "passport" cue does the rest.
 PASSPORT = _recognizer("PASSPORT", [
     # No boundary before the letters: OCR glues "PP CF581535" into "PPCF581535".
-    Pattern("Passport lettered", r"(?<!\d)[A-Z]{1,2}[\s-]?\d{6,8}(?!\d)", 0.35),
+    # Capital letters may be glued to a preceding word; lower-case ones must start a word, or
+    # "Deadline 20240315" loses "ne" and becomes "Deadli** ********".
+    Pattern("Passport lettered", r"(?:(?<!\d)(?-i:[A-Z]{1,2})|\b(?-i:[a-z]{1,2}))[\s-]?\d{6,8}(?!\d)", 0.35),
     Pattern("Passport bare digits", r"\b\d{9}\b", 0.35),  # same reasoning as a bare SSN
 ], re.MULTILINE | re.IGNORECASE)
 
