@@ -247,10 +247,11 @@ ADDRESS = _recognizer("ADDRESS", [
             r"\b\d{1,5}[A-Za-z]?,?\s+(?:Rue|Avenue|Boulevard|Bd|Place|Chemin|All[ée]e|Impasse|Quai|Via|Viale"
             rf"|Calle|Avenida|Plaza)(?:\s+[\w'-]+){{1,6}}{_TAIL}", 0.75),
     # US military mail: ship, PSC box or unit, then APO/FPO/DPO + AA/AE/AP + ZIP. Digit groups
-    # may break across a line ("Box 47" / "75, APO ..."), as PDF text layers wrap mid-number.
+    # may break across a line ("Box 47" / "75, APO ..."), as PDF text layers wrap mid-number,
+    # and every space may be missing, as OCR drops them ("PSC0489,Box6499,APOAE87326").
     Pattern("Military address",
-            rf"\b(?:(?:USNS|USNV|USS|USCGC)\s+[A-Z][\w'-]*(?:\s[A-Z][\w'-]*)?|PSC\s+{_D4},?\s+Box\s+{_D4}"
-            rf"|Unit\s+{_D4},?\s+Box\s+{_D4})\s*[,\n]\s*(?:APO|FPO|DPO)\s*(?:AA|AE|AP)\s*\d(?:\s*\d){{4}}(?!\d)", 0.9),
+            rf"\b(?:(?:USNS|USNV|USS|USCGC)\s*[A-Z][\w'-]*(?:\s[A-Z][\w'-]*)?|PSC\s*{_D4},?\s*Box\s*{_D4}"
+            rf"|Unit\s*{_D4},?\s*Box\s*{_D4})\s*[,\n]\s*(?:APO|FPO|DPO)\s*(?:AA|AE|AP)\s*\d(?:\s*\d){{4}}(?!\d)", 0.9),
     Pattern("PO box", rf"\b(?:P\.?\s?O\.?\s?Box|Post\s+Office\s+Box)\s+\d+{_TAIL}", 0.75),
     Pattern("Numbered unit", rf"\b(?:Unit|Suite|Flat|Apartment)\s+\d+[A-Za-z]?{_TAIL}", 0.6),
     # A postcode locates a person to a street in the UK and Canada, so it is redacted with

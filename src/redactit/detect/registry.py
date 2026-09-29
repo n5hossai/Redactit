@@ -81,7 +81,7 @@ class Detector:
 # confident one. Presidio's own enhancer compares single lemmas (so "date of birth" never
 # matches) and adds only 0.35, which left a labelled birth date below every threshold.
 _CONTEXT = {
-    "DATE_OF_BIRTH": re.compile(r"\b(born|dob|d\.o\.b|birth\s*date|date\s+of\s+birth|birthday)\b", re.I),
+    "DATE_OF_BIRTH": re.compile(r"\b(born|dob|d\.o\.b|birth\s*date|date\s*of\s*birth|birthday)\b", re.I),  # OCR: "Dateof"
     "PASSPORT": re.compile(r"\bpassport\b", re.I),
     "PHONE": re.compile(r"\b(phone|tel|telephone|mobile|cell|call|fax|contacts?|reach|text|sms|number)\b", re.I),
     "US_SSN": re.compile(r"\b(ssn|ss\s*(?:no|#|number)|soc(?:ial)?\.?\s*sec(?:urity)?)\b", re.I),

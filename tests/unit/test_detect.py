@@ -365,6 +365,7 @@ def test_street_addresses_the_model_misses(det, addr):
     ("Date of birth: 12.03.1985", "12.03.1985"),
     ("DOB: March 12th, 1985", "March 12th, 1985"),
     ("Born 1985/03/12 in Leeds.", "1985/03/12"),
+    ("Dateof birth:1951-04-07", "1951-04-07"),  # OCR dropped the spaces
 ])
 def test_birth_dates_in_more_formats(det, text, dob):
     spans = [s for s in _spans_of(det, text, "DATE_OF_BIRTH") if text[s.start:s.end] == dob]
@@ -476,6 +477,8 @@ def test_wrapped_digits_that_fail_luhn_are_not_cards(det):
     ("SSN219-09-9999end", "219-09-9999", "US_SSN"),
     ("Phone5551234567", "5551234567", "PHONE"),
     ("NIAB123456C", "AB123456C", "UK_NINO"),
+    # 35 characters: OCR read "rn" in this 36-character token as "m"
+    ("TOKEN=ghp_vQRA5ndPdmVuCNY3nO1aKoflpFqWEH3lOHx", "ghp_vQRA5ndPdmVuCNY3nO1aKoflpFqWEH3lOHx", "API_KEY"),
 ])
 def test_values_glued_to_a_label(det, text, value, entity):
     assert _covers(_spans_of(det, text, entity), text, value)
@@ -492,6 +495,8 @@ def test_a_glued_iban_is_only_validated_when_it_passes_mod97(det):
     ("Address: 2 Josh Plains, Va\r\nnessafort, S6 5WJ", "2 Josh Plains, Va\r\nnessafort, S6 5WJ"),  # mid-word wrap
     ("Address: PSC 6319, Box 47\r\n75, APO AP 11657", "PSC 6319, Box 47\r\n75, APO AP 11657"),
     ("Address: USNS Green,\nFPOAE26947", "USNS Green,\nFPOAE26947"),
+    ("Address:PSC0489,Box6499,APOAE87326", "PSC0489,Box6499,APOAE87326"),
+    ("Address: PSC 6319,Box 47\n75,APO AP 11657", "PSC 6319,Box 47\n75,APO AP 11657"),
     # "Crest" is no known street type; the state (read "Vl" for "VI") and ZIP carry the line.
     ("Address: 1505 Combs Crest Apt.044, Calvinfurt, Vl 77725", "1505 Combs Crest Apt.044, Calvinfurt, Vl 77725"),
 ])

@@ -16,7 +16,8 @@ _KEY_END = r"(?:-----END {kind}-----|\Z)"
 PATTERNS = [
     Pattern("AWS access key", r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b", 0.85),
     Pattern("AWS secret key (weak)", r"(?<![A-Za-z0-9/+=])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])", 0.3),
-    Pattern("GitHub token", r"\bgh[opsur]_[A-Za-z0-9]{36,}\b", 0.85),
+    # 36 characters when issued; from 30, as OCR merges pairs ("rn" read as "m").
+    Pattern("GitHub token", r"\bgh[opsur]_[A-Za-z0-9]{30,}\b", 0.85),
     Pattern("GitHub fine-grained PAT", r"\bgithub_pat_[A-Za-z0-9_]{20,}\b", 0.85),
     Pattern("GitLab token", r"\bglpat-[A-Za-z0-9_-]{20,}\b", 0.85),
     Pattern("Hugging Face token", r"\bhf_[A-Za-z0-9]{30,}\b", 0.85),
