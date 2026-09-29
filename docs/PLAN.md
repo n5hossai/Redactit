@@ -77,7 +77,7 @@ Runtime dependencies must be MIT, Apache-2.0 or BSD. Exceptions are listed in se
 | NLP engine for Presidio | spaCy `en_core_web_sm` | MIT | Tokenisation only; GLiNER does the entity work. |
 | Validators, secrets | In-house (Luhn, IBAN mod-97, SIN, SSN, NINO, key formats) | n/a | Each is under 20 lines. `python-stdnum` is LGPL, so it is excluded. |
 | PDF | `pypdfium2` | Apache-2.0 / BSD-3 | Text with character boxes plus page rendering. PyMuPDF is AGPL, so it is excluded. |
-| PDF rebuild | Pillow multi-page PDF writer | MIT-CMU (flagged) | Writes raster pages only, never a text layer. `img2pdf` is LGPL, so it is excluded. |
+| PDF rebuild | `pypdfium2`: a new document of JPEG page images | Apache-2.0 / BSD-3 | Writes raster pages only, never a text layer. `img2pdf` is LGPL, so it is excluded. |
 | OCR | RapidOCR on `onnxruntime` | Apache-2.0 / MIT | Installs with pip, word boxes, ONNX files can be pinned. |
 | Faces | OpenCV YuNet (`opencv-python-headless`) | Apache-2.0 | Small, CPU-fast, returns boxes. |
 | QR / barcodes | `zxing-cpp` | Apache-2.0 | Detects and locates many symbologies. `pyzbar` needs `zbar` (LGPL). |
@@ -88,7 +88,7 @@ Runtime dependencies must be MIT, Apache-2.0 or BSD. Exceptions are listed in se
 | Folder watcher | `watchdog` | Apache-2.0 | Cross-platform file events. |
 | Clipboard | `ctypes` (Windows), `pyobjc` (macOS), `wl-paste`/`xclip` (Linux) | PSF / MIT / external process | Reads the "concealed" markers that password managers set. |
 | Tests | `pytest`, `pytest-socket`, `Faker` | MIT | `pytest-socket` makes any network call fail the test. |
-| Test corpus | `reportlab` (digital PDFs), `pypdfium2`, `rapidocr-onnxruntime`, `zxing-cpp` | BSD / Apache-2.0 | Builds and re-extracts the synthetic corpus. Test-only. |
+| Test corpus | `reportlab` (digital PDFs), `Faker` | BSD / MIT | Builds the synthetic corpus. Test-only. The verifier reuses the runtime PDF, OCR, barcode and face libraries with its own settings. |
 | Build backend | `hatchling` | MIT | Standard PEP 517 backend for `uv`. |
 | Extension | MV3, plain JavaScript + JSDoc, no build step | n/a | What Chrome loads is exactly what is reviewed. |
 
@@ -187,9 +187,9 @@ are committed.
 | Format | Extract | Apply | Output |
 |---|---|---|---|
 | Text / MD | Whole file as one segment; Markdown syntax untouched | String replacement by span | Same format |
-| DOCX | Walk `document.xml`, `header*.xml`, `footer*.xml`, `footnotes.xml`, `endnotes.xml`, `comments.xml`; include `w:ins` and `w:del` runs; comment and revision authors are names | Replace in extracted text | Markdown with sections: Body, Headers and footers, Notes, Comments, Tracked changes. `docProps` metadata is dropped |
-| PDF | Per page: text and character boxes from `pypdfium2`. Every page is also rendered at 200 DPI and sent through the image pipeline, which catches scanned pages, text inside embedded images, and outlined fonts | Spans map to character boxes, merged per line and padded; image-pipeline boxes are unioned in; boxes are filled and labelled `[PERSON_1]` when the action is pseudonymize | New PDF built only from the page images (no text layer, no metadata), plus `.md` |
-| Image | OCR word boxes, YuNet faces, zxing codes (the decoded payload is scanned too) | Fill boxes on a copy of the pixels | Re-encoded from raw pixels, so EXIF and GPS never carry over |
+| DOCX | Walk `document.xml`, `header*.xml`, `footer*.xml`, `footnotes.xml`, `endnotes.xml`, `comments.xml`; include `w:ins` and `w:del` runs; comment and revision authors are names; text in any other part (text boxes, charts, SmartArt, custom XML). No DTDs; at most 2000 parts and 200 MiB of XML | Replace in extracted text | `name.docx.md` with sections: Body, Headers and footers, Notes, Comments, Tracked changes, Authors, Other text. `docProps` metadata is dropped |
+| PDF | Per page: text and character boxes from `pypdfium2`, placed on the rendered page through PDFium so rotated and cropped pages line up. Every page is also rendered at 200 DPI and sent through the image pipeline, which catches scanned pages, text inside embedded images, and outlined fonts. At most 500 pages and 64 MP per page | Spans map to character boxes, merged per line and padded; image-pipeline boxes are unioned in; boxes are filled and labelled `[PERSON_1]` when the action is pseudonymize | New PDF built only from the page images (no text layer, no metadata), plus `name.pdf.md` from OCR of the visible page, so text hidden under a drawn box never reaches it |
+| Image | PNG, JPEG, WebP, BMP, GIF, TIFF only, at most 50 MP. OCR at full size (tiles past 4096 px), YuNet faces, zxing codes (always filled; the payload is not read) | Fill boxes on a copy of the pixels | Re-encoded from raw pixels, so EXIF and GPS never carry over; JPEG stays JPEG, the rest become PNG |
 
 ## 6. Policy, dial and pseudonyms
 
@@ -281,10 +281,12 @@ linked into Redactit.
 1. `tests/corpus/generate.py --seed N` writes documents in every format, with the seeded
    values recorded in a manifest. It includes hard cases: values split across lines, cards
    with spaces or dashes, PII in DOCX headers, comments and deleted revisions, text inside
-   images embedded in PDFs, low-contrast and rotated text, and QR codes that encode PII.
+   images embedded in PDFs, rotated and cropped PDF pages, low-contrast and rotated text,
+   small text in a 4K screenshot, faces, and QR codes that encode PII.
 2. Redact the corpus at the admin floor and at the tightest dial.
 3. Verify each output **independently of the redactor**. Correlated errors would hide
-   leaks, so the verifier uses higher-resolution rendering and its own OCR settings. It
+   leaks, so the verifier uses higher-resolution rendering (300 DPI) and its own OCR
+   settings (full size up to 8192 px, three rotations). It
    also compares normalised forms (digits only for numbers, case-folded names, edit
    distance of 1 or less).
    - PDF: re-extract the text layer (expected empty) and re-OCR every page.
@@ -310,10 +312,10 @@ floor. Precision is reported, not gated.
 | 6 | Another extension or process talks to the host | `allowed_origins` lists one fixed extension ID; host checks the caller origin |
 | 7 | A user edits the policy to weaken it | Managed layer + tighten-only merge |
 | 8 | Context re-identifies a pseudonym ("the CEO of [ORG_1]") | Documented residual risk; out of scope for the MVP |
-| 9 | OCR misses small, rotated or low-contrast text | 200 DPI raster, angle classifier, padded boxes, corpus hard cases |
+| 9 | OCR misses small, rotated or low-contrast text | 200 DPI raster, full-size reads, four quarter turns (RapidOCR's own classifier only knows 180 degrees), a 2x pass for small images, padded boxes, corpus hard cases |
 | 10 | Model load makes the hotkey feel slow (3 to 5 s) | Accepted for the MVP; measured and reported |
 | 11 | OS keychain unavailable (headless Linux) | Fail closed with a clear setup message |
-| 12 | Face test images must be synthetic and license-clean | Open question, see section 12 |
+| 12 | Face test images must be synthetic and license-clean | Public-domain AI-generated portraits; sources in `tests/fixtures/faces/SOURCES.md` |
 
 ## 11. Delivery
 
@@ -343,5 +345,4 @@ change is visual, and the leak report attached. Nothing merges without owner app
 
 ## 12. Open questions
 
-- Source of synthetic face images for the image corpus (must be generated, never real
-  people, and license-clean).
+None open. Face fixtures were settled in Phase 3 (risk 12).

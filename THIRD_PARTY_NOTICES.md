@@ -8,7 +8,7 @@ The components below are the exceptions: they are under the LGPL (copyleft) or t
 can replace. `tests/test_licenses.py` fails if any other copyleft component appears, and
 `docs/PLAN.md` section 8 records why these were accepted.
 
-## FFmpeg, inside opencv-python 5.0.0.93
+## FFmpeg, inside opencv-python-headless 5.0.0.93
 
 - **Version.** FFmpeg 7.1 in the Windows x64 wheel. The wheel's notice files do not name a
   version, so it was read from `cv2/opencv_videoio_ffmpeg500_64.dll`, which reports libavcodec
@@ -17,19 +17,20 @@ can replace. `tests/test_licenses.py` fails if any other copyleft component appe
 - **License.** LGPL-2.1-or-later. The OpenCV wheel itself is Apache-2.0.
 - **License text.** https://github.com/FFmpeg/FFmpeg/blob/n7.1/COPYING.LGPLv2.1, also
   https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt and the wheel's
-  `opencv_python-5.0.0.93.dist-info/LICENSE-3RD-PARTY.txt`.
+  `opencv_python_headless-5.0.0.93.dist-info/LICENSE-3RD-PARTY.txt`.
 - **Source.** https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz (tag https://github.com/FFmpeg/FFmpeg/tree/n7.1).
-  The wheel's own source is the opencv-python 5.0.0.93 sdist (URL and SHA-256 in `uv.lock`).
+  The wheel's own source is the opencv-python-headless 5.0.0.93 sdist (URL and SHA-256 in `uv.lock`).
 - **Use.** Unmodified. FFmpeg is linked into a separate plugin DLL that OpenCV loads at run
   time, so replacing `opencv_videoio_ffmpeg500_64.dll` replaces FFmpeg. Redactit never
   decodes video.
-- **Other platforms.** Not inspected. The opencv-python 5.0.0.93 Linux build files pin FFmpeg
-  8.1.1 (https://github.com/opencv/opencv-python/blob/93/docker/manylinux_2_28/Dockerfile_x86_64);
+- **Other platforms.** Not inspected. The opencv-python 5.0.0.93 Linux build files, shared by
+  the headless wheels, pin FFmpeg 8.1.1
+  (https://github.com/opencv/opencv-python/blob/93/docker/manylinux_2_28/Dockerfile_x86_64);
   the macOS build files name no FFmpeg version. The wheel's notice file also lists these
-  LGPL libraries as redistributed on other platforms: Qt 5 (non-headless Linux and macOS
-  wheels) and libgmp, libidn2, libunistring (macOS), all LGPL-3.0; libbluray, libgnutls,
-  libnettle, libhogweed, libintl, libmp3lame, libp11, librtmp, libsoxr, libtasn1 (macOS),
-  LGPL-2.1. Their versions and sources are not recorded here.
+  LGPL libraries as redistributed on macOS: libgmp, libidn2, libunistring (LGPL-3.0);
+  libbluray, libgnutls, libnettle, libhogweed, libintl, libmp3lame, libp11, librtmp, libsoxr,
+  libtasn1 (LGPL-2.1). Their versions and sources are not recorded here. Qt 5 ships only in
+  the non-headless wheels, which Redactit does not install.
 
 ## GEOS, inside shapely 2.1.2
 
