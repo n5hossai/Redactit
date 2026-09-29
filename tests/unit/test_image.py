@@ -145,6 +145,16 @@ def test_a_thin_strip_is_read_and_its_quads_stay_on_the_strip():
     assert "Okafor" in line.text and x0 < 40 and x1 > 150 and -8 <= y0 and y1 <= 52
 
 
+@pytest.mark.parametrize("size", [(3840, 2160), (9000, 5000), (4097, 300)])
+def test_large_images_are_read_in_overlapping_tiles_that_cover_every_pixel(size):
+    tiles = [(x, y, *t.size) for (x, y), t in ocr._tiles(Image.new("RGB", size))]
+    assert all(w <= ocr.MAX_SIDE and h <= ocr.MAX_SIDE for *_, w, h in tiles)
+    for axis in (0, 1):  # along each axis: from 0 to the far edge, neighbours sharing at least TILE_OVERLAP
+        spans = sorted({(t[axis], t[axis] + t[axis + 2]) for t in tiles})
+        assert spans[0][0] == 0 and spans[-1][1] == size[axis]
+        assert all(a_end - b_start >= ocr.TILE_OVERLAP for (_, a_end), (b_start, _) in zip(spans, spans[1:]))
+
+
 def test_merge_takes_whole_lines_over_fragments_and_spaces_over_glue():
     def line(text, x0, x1, top=0, slant=0):  # a box `slant` pixels lower at its right end
         return ocr.Line(text, ((x0, top), (x1, top + slant), (x1, top + slant + 38), (x0, top + 38)))
