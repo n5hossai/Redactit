@@ -48,23 +48,31 @@ def _redact(args: argparse.Namespace) -> int:
     engine = Engine(load_policy(user_policy, managed), Vault.open(paths["vault"]), AuditLog(paths["audit"]))
     scope = args.scope or uuid.uuid4().hex  # a fresh scope per call unless the caller links runs
     args.out.mkdir(parents=True, exist_ok=True)
+    seen = set()
     for i, src in enumerate(args.paths, 1):
         kind = SUFFIXES.get(src.suffix.lower())
         if kind is None:
             print(f"skipped {i}/{len(args.paths)}: {src.suffix or 'no extension'} is not supported", file=sys.stderr)
             continue
+        if src.name.lower() in seen:  # a/notes.md and b/notes.md would both write out/notes.md
+            print(f"skipped {i}/{len(args.paths)}: an earlier input has the same name", file=sys.stderr)
+            continue
+        seen.add(src.name.lower())
+        # A changed format is appended to the full name ("notes.docx.md", "scan.pdf.md",
+        # "photo.webp.png"), so notes.docx can never overwrite notes.md from the same folder.
         dst = args.out / src.name
         if kind == "pdf":  # rebuilt from pixels, plus the redacted page text as Markdown
             pdf, markdown = redact_pdf(src.read_bytes(), engine, scope)
             dst.write_bytes(pdf)
-            dst.with_suffix(".md").write_text(markdown, encoding="utf-8")
-        elif kind == "image":
+            dst.with_name(dst.name + ".md").write_text(markdown, encoding="utf-8")
+        elif kind == "image":  # JPEG stays JPEG; every other format becomes PNG
             image, suffix, _ = redact_image(src.read_bytes(), engine, scope)
-            dst.with_suffix(suffix).write_bytes(image)
+            same = src.suffix.lower() in ((".jpg", ".jpeg") if suffix == ".jpg" else (suffix,))
+            (dst if same else dst.with_name(dst.name + suffix)).write_bytes(image)
         else:  # Word documents come out as Markdown; txt and md keep their format
             text = docx_to_markdown(src.read_bytes()) if kind == "docx" else src.read_text(encoding="utf-8")
             result = engine.redact(text, scope, file_type=src.suffix[1:].lower(), site=args.site)
-            (dst.with_suffix(".md") if kind == "docx" else dst).write_text(result.text, encoding="utf-8")
+            (dst.with_name(dst.name + ".md") if kind == "docx" else dst).write_text(result.text, encoding="utf-8")
         print(f"redacted {i}/{len(args.paths)}")
     return 0
 

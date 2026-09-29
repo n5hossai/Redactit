@@ -53,14 +53,14 @@ def _write(corpus: Path, out: Path, doc: dict, engine) -> None:
     if fmt == "pdf":
         pdf, markdown = redact_pdf(src.read_bytes(), engine, scope)
         dst.write_bytes(pdf)
-        dst.with_suffix(".md").write_text(markdown, encoding="utf-8")
+        dst.with_name(dst.name + ".md").write_text(markdown, encoding="utf-8")
     elif fmt in ("png", "jpg"):
         image, suffix, text = redact_image(src.read_bytes(), engine, scope)
         dst.with_suffix(suffix).write_bytes(image)
-        dst.with_suffix(".md").write_text(text, encoding="utf-8")
+        dst.with_name(dst.name + ".md").write_text(text, encoding="utf-8")
     else:  # Word documents are redacted as Markdown; txt and md keep their format
         text = docx_to_markdown(src.read_bytes()) if fmt == "docx" else src.read_text(encoding="utf-8")
-        target = dst.with_suffix(".md") if fmt == "docx" else dst
+        target = dst.with_name(dst.name + ".md") if fmt == "docx" else dst
         target.write_text(engine.redact(text, scope=scope, file_type=fmt).text, encoding="utf-8")
 
 
