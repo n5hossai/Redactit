@@ -176,6 +176,19 @@ def test_lines_come_back_top_to_bottom_and_left_to_right():
     assert ocr._reading_order([third, first, second]) == [first, second, third]
 
 
+def test_lines_of_a_sideways_page_come_back_in_its_own_reading_order():
+    def column(text, x):  # read top to bottom, glyph tops facing right: a page turned 90 degrees
+        return ocr.Line(text, ((x + 20, 0), (x + 20, 200), (x, 200), (x, 0)))
+
+    first, second, third = column("a", 300), column("b", 250), column("c", 200)
+    assert ocr._reading_order([third, first, second]) == [first, second, third]
+
+
+def test_padding_follows_the_text_height_even_on_an_upright_box_over_sideways_text():
+    grown = image._grow(((100, 0), (120, 0), (120, 400), (100, 400)))  # 20 px wide, 400 px long
+    assert [round(x) for x, _ in grown] == [97, 123, 123, 97]  # 15% of 20 px, not of 400 px
+
+
 def test_char_quad_interpolates_along_the_reading_direction():
     across = ocr.Line("abcd", ((0, 0), (40, 0), (40, 10), (0, 10)))
     assert ocr.char_quad(across, 1, 3) == ((10, 0), (30, 0), (30, 10), (10, 10))

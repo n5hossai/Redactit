@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections import Counter
 from dataclasses import dataclass
 from functools import cache
 from itertools import accumulate
@@ -174,10 +175,19 @@ def _inside(p: tuple[float, float], quad: Quad) -> bool:
 
 
 def _reading_order(lines: list[Line]) -> list[Line]:
-    """Top to bottom, and left to right within a row, so wrapped values stay adjacent."""
-    def centre(line):
+    """Top to bottom, and left to right within a row, so wrapped values stay adjacent.
+
+    "Top" is measured in the direction most lines read: on a page turned sideways the lines
+    are columns, and sorting them by image rows put the last line first.
+    """
+    quarter = Counter(round(math.atan2(q[1][1] - q[0][1], q[1][0] - q[0][0]) / (math.pi / 2)) % 4
+                      for q in (line.quad for line in lines)).most_common(1)[0][0] if lines else 0
+    cos, sin = round(math.cos(quarter * math.pi / 2)), round(math.sin(quarter * math.pi / 2))
+
+    def centre(line):  # in a frame turned back by `quarter`, so lines read left to right
         x0, y0, x1, y1 = _bbox(line.quad)
-        return (x0 + x1) / 2, (y0 + y1) / 2
+        x, y = (x0 + x1) / 2, (y0 + y1) / 2
+        return x * cos + y * sin, y * cos - x * sin
 
     rows: list[tuple[float, float, list[Line]]] = []  # (centre y, half height, lines)
     for line in sorted(lines, key=lambda l: centre(l)[1]):

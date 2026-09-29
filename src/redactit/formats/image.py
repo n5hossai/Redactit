@@ -181,9 +181,11 @@ def _barcodes(rgb: Image.Image) -> list[Box]:
 
 
 def _grow(quad: Quad) -> Quad:
-    """Move every side outwards by PAD of the box height, along the box's own axes."""
+    """Move every side outwards by PAD of the box's shorter side (the text height), along the
+    box's own axes. Not always p0 to p3: a text-layer box on a sideways page is upright in
+    pixels, so that side is the line's length, and a padding from it covered the next lines."""
     p0, p1, p2, p3 = quad
-    pad = PAD * math.dist(p0, p3)
+    pad = PAD * min(math.dist(p0, p1), math.dist(p0, p3))
 
     def unit(p, q):
         d = math.dist(p, q) or 1.0
