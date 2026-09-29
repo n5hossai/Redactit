@@ -145,6 +145,7 @@ def _to_span(result: RecognizerResult) -> Span:
         entity_type=result.entity_type,
         score=result.score,
         detector=meta.get(RecognizerResult.RECOGNIZER_NAME_KEY, ""),
-        validated=result.entity_type in _CHECKSUM_TYPES
-        or (result.entity_type in _STRUCTURAL_TYPES and result.score >= STRUCTURAL_SCORE),
+        # A passed checksum raises a match to 1.0, so the score separates confirmed matches
+        # from shapes that merely look like one (an OCR-misread IBAN scores 0.6).
+        validated=result.entity_type in _CHECKSUM_TYPES | _STRUCTURAL_TYPES and result.score >= STRUCTURAL_SCORE,
     )

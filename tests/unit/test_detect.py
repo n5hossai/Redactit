@@ -124,7 +124,8 @@ def test_iban_bad_checksum_not_detected(det):
     broken = iban[:2] + "00" + iban[4:]
     assert not gen.iban_mod97_ok(broken)
     text = f"My IBAN is {broken}."
-    assert _spans_of(det, text, "IBAN") == []
+    # Still masked by shape (often an OCR misread, and IBAN is locked), but never "validated".
+    assert not [s for s in _spans_of(det, text, "IBAN") if s.validated]
 
 
 # --- CA_SIN (Luhn + reserved first digit) -----------------------------------
@@ -241,9 +242,15 @@ def test_company_term_exact_match(det):
     assert all(s.validated and s.score == 1.0 for s in spans)
 
 
-def test_company_term_is_not_a_longer_word(det):
-    text = "We discussed Project Bluefinches today."
-    assert _spans_of(det, text, "COMPANY_TERM") == []
+def test_a_short_company_term_is_not_part_of_a_longer_word(det):
+    short = Detector(company_terms=["Acme"])
+    assert _spans_of(short, "Acmeville council met today.", "COMPANY_TERM") == []
+
+
+def test_a_long_codename_is_found_glued_or_inflected(det):
+    """OCR glues words, and "Project Bluefinches" still names the codename."""
+    for text in ("We discussed Project Bluefinches today.", "Re:ProjectBluefinch status"):
+        assert _spans_of(det, text, "COMPANY_TERM"), text
 
 
 def test_company_term_longest_match_wins():
@@ -474,5 +481,15 @@ def test_values_glued_to_a_label(det, text, value, entity):
     assert _covers(_spans_of(det, text, entity), text, value)
 
 
-def test_a_glued_iban_must_pass_mod97(det):
-    assert not [s for s in _spans_of(det, "REFGB82WEST12345698765433", "IBAN") if s.detector == "glued_iban"]
+def test_a_glued_iban_is_only_validated_when_it_passes_mod97(det):
+    spans = [s for s in _spans_of(det, "REFGB82WEST12345698765433", "IBAN") if s.detector == "glued_iban"]
+    assert spans and not any(s.validated for s in spans)
+
+
+@pytest.mark.parametrize("text, addr", [
+    ("Address: 2 Josh Plains, \r\nVanessafort, S6 5WJ", "2 Josh Plains, \r\nVanessafort, S6 5WJ"),
+    ("1678WallerInlet,EastMatthew,SKR3P1B2", "1678WallerInlet,EastMatthew,SKR3P1B2"),
+    ("Address: PSC 6319, Box 47\r\n75, APO AP 11657", "PSC 6319, Box 47\r\n75, APO AP 11657"),
+])
+def test_addresses_wrapped_or_glued_by_ocr(det, text, addr):
+    assert _covers(_spans_of(det, text, "ADDRESS"), text, addr)

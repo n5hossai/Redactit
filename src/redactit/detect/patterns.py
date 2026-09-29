@@ -91,8 +91,11 @@ class GluedIbanRecognizer(EntityRecognizer):
         for m in re.finditer(r"(?=([A-Z]{2})\d{2})", text):
             n = IBAN_LENGTHS.get(m.group(1), 0)
             candidate = text[m.start():m.start() + n]
-            if n and re.fullmatch(r"[A-Z0-9]+", candidate) and len(candidate) == n and _iban_ok(candidate):
-                results.append(RecognizerResult("IBAN", m.start(), m.start() + n, 1.0,
+            if n and len(candidate) == n and re.fullmatch(r"[A-Z0-9]+", candidate):
+                # A checksum pass is certain. An IBAN-shaped string that fails it is most often
+                # an OCR misread (O for 0), and IBAN is locked, so it is masked either way.
+                score = 1.0 if _iban_ok(candidate) else 0.6
+                results.append(RecognizerResult("IBAN", m.start(), m.start() + n, score,
                                                 recognition_metadata={RecognizerResult.RECOGNIZER_NAME_KEY: self.name}))
         return results
 
@@ -107,7 +110,8 @@ class CaSinRecognizer(PatternRecognizer):
     """Canadian SIN: 9 digits, optional space/dash grouping, Luhn check digit.
 
     The first digit is never 0 or 8 (those ranges are reserved and never issued), so the
-    regex excludes them up front; `invalidate_result` then drops anything that fails Luhn.
+    regex excludes them up front; `validate_result` keeps only numbers that pass Luhn, which
+    also raises their score to 1.0, marking them as checksum-confirmed.
     """
 
     # Digit lookarounds instead of \b: OCR glues labels to values ("SIN046454286").
@@ -116,8 +120,8 @@ class CaSinRecognizer(PatternRecognizer):
     def __init__(self) -> None:
         super().__init__(supported_entity="CA_SIN", patterns=self.PATTERNS, global_regex_flags=re.MULTILINE)
 
-    def invalidate_result(self, pattern_text: str) -> bool:
-        return not _luhn_ok(re.sub(r"[- ]", "", pattern_text))
+    def validate_result(self, pattern_text: str) -> bool:
+        return _luhn_ok(re.sub(r"[- ]", "", pattern_text))
 
 
 class UsSsnRecognizer(PatternRecognizer):
@@ -207,21 +211,26 @@ _STREET_TYPE = (r"(?:Street|St|Road|Rd|Lane|Ln|Avenue|Ave|Boulevard|Blvd|Drive|D
 _UNIT = r"(?:(?:Flat|Apt\.?|Apartment|Unit|Suite)\s*[\w-]+,?\s+)?"
 _UNIT_AFTER = r"(?:,?[^\S\n]*(?:Apt|Apartment|Suite|Ste|Unit|Flat|#)\.?[^\S\n]*[\w-]+)?"
 _TAIL = _UNIT_AFTER + r"(?:,[^\S\n]*[^,\n.;:!?]{2,40}){0,4}"
-_BEFORE = r"(?:[^,\n.;:!?|]{2,40},[^\S\n]*){0,3}(?:[^,\n.;:!?|]{0,30}[^\S\n])?"
+# Up to three comma-separated parts before a postcode; a part may end a line, since PDFs
+# and hard-wrapped text break addresses after a comma ("2 Josh Plains," / "Vanessafort, S6 5WJ").
+_BEFORE = r"(?:[^,\n.;:!?|]{2,40},\s*){0,3}(?:[^,\n.;:!?|]{0,30}[^\S\n]?)?"  # OCR may glue "SKR3P1B2"
+_D4 = r"\d(?:\s*\d){3}"  # four digits, possibly broken by a line wrap
 ADDRESS = _recognizer("ADDRESS", [
     Pattern("Street, number first",
             rf"\b{_UNIT}\d{{1,5}}[A-Za-z]?,?\s+(?:[A-Z][\w'-]*\s+){{0,4}}{_STREET_TYPE}\b\.?{_TAIL}", 0.75),
     Pattern("Street, type first (FR/ES/IT)",
             r"\b\d{1,5}[A-Za-z]?,?\s+(?:Rue|Avenue|Boulevard|Bd|Place|Chemin|All[ée]e|Impasse|Quai|Via|Viale"
             rf"|Calle|Avenida|Plaza)(?:\s+[\w'-]+){{1,6}}{_TAIL}", 0.75),
-    # US military mail: ship, PSC box or unit, then APO/FPO/DPO + AA/AE/AP + ZIP.
+    # US military mail: ship, PSC box or unit, then APO/FPO/DPO + AA/AE/AP + ZIP. Digit groups
+    # may break across a line ("Box 47" / "75, APO ..."), as PDF text layers wrap mid-number.
     Pattern("Military address",
-            r"\b(?:(?:USNS|USNV|USS|USCGC)\s+[A-Z][\w'-]*(?:\s[A-Z][\w'-]*)?|PSC\s+\d{4},?\s+Box\s+\d{4}"
-            r"|Unit\s+\d{4},?\s+Box\s+\d{4})[,\n]\s*(?:APO|FPO|DPO)\s+(?:AA|AE|AP)\s+\d{5}\b", 0.9),
+            rf"\b(?:(?:USNS|USNV|USS|USCGC)\s+[A-Z][\w'-]*(?:\s[A-Z][\w'-]*)?|PSC\s+{_D4},?\s+Box\s+{_D4}"
+            rf"|Unit\s+{_D4},?\s+Box\s+{_D4})\s*[,\n]\s*(?:APO|FPO|DPO)\s+(?:AA|AE|AP)\s+\d(?:\s*\d){{4}}(?!\d)", 0.9),
     Pattern("PO box", rf"\b(?:P\.?\s?O\.?\s?Box|Post\s+Office\s+Box)\s+\d+{_TAIL}", 0.75),
     Pattern("Numbered unit", rf"\b(?:Unit|Suite|Flat|Apartment)\s+\d+[A-Za-z]?{_TAIL}", 0.6),
     # A postcode locates a person to a street in the UK and Canada, so it is redacted with
     # up to three comma-separated parts before it (building, street, town) on its line.
-    Pattern("UK postcode", _BEFORE + r"\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[ABD-HJLNP-UW-Z]{2}\b", 0.55),
-    Pattern("CA postal code", _BEFORE + r"\b[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\s?\d[ABCEGHJ-NPRSTV-Z]\d\b", 0.55),
+    # Digit lookarounds, not \b: OCR glues the province or town to the code ("SKR3P1B2").
+    Pattern("UK postcode", _BEFORE + r"(?<!\d)[A-Z]{1,2}\d[A-Z\d]?\s*\d[ABD-HJLNP-UW-Z]{2}(?![a-z0-9])", 0.55),
+    Pattern("CA postal code", _BEFORE + r"(?<!\d)[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\s?\d[ABCEGHJ-NPRSTV-Z]\d(?!\d)", 0.55),
 ])
