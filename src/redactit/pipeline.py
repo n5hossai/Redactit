@@ -34,7 +34,8 @@ class Engine:
             audit.write("engine_start", version=__version__)
             audit.write("policy_loaded", dial=policy.effective_dial(), admin_floor=policy.dial.admin_floor,
                         entity_count=len(policy.entities), locked_count=sum(e.locked for e in policy.entities.values()))
-            for name, pin in models.LOCK.items():  # path_for above already verified each hash
+            for name, pin in models.LOCK.items():
+                models.path_for(name)  # hash-check every pinned file, so the event below is true
                 audit.write("model_verified", model=name.replace("/", ".").lower(),
                             revision=pin["url"].split("/resolve/")[1].split("/")[0], sha256=pin["sha256"])
             audit.write("vault_purge", purged_count=purged, retention_days=policy.vault.retention_days)
