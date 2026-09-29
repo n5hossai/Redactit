@@ -24,7 +24,7 @@ from faker import Faker
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from corpus_docx import DOCX_VARIANTS, build_docx
-from corpus_media import PDF_VARIANTS, build_image, build_pdf
+from corpus_media import PDF_VARIANTS, build_image, build_pdf, build_screenshot
 
 LOCALES = ["en_US", "en_CA", "en_GB"]
 
@@ -292,6 +292,7 @@ _PLAN = (
     + [("docx", v, "docx", lambda vf, path, v=v: build_docx(v, vf, path)) for v in DOCX_VARIANTS]
     + [("pdf", v, "pdf", lambda vf, path, v=v: build_pdf(v, vf, path)) for v in PDF_VARIANTS]
     + [("png", "plain", "png", lambda vf, path: build_image("png", vf, path))]
+    + [("png", "screenshot_4k", "png", build_screenshot)]
     + [("jpg", "plain", "jpg", lambda vf, path: build_image("jpg", vf, path))]
 )
 

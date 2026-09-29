@@ -19,7 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 import PIL.ExifTags as ExifTags
 import zxingcpp
 
-PDF_VARIANTS = ["digital", "split_lines", "scanned", "mixed"]
+PDF_VARIANTS = ["digital", "split_lines", "scanned", "mixed", "rotated", "cropped"]
 
 FONT_SIZE = 32  # capitals render ~23 px tall, lowercase ~18 px: RapidOCR reads both reliably
 _FONT = ImageFont.load_default(size=FONT_SIZE)
@@ -99,6 +99,26 @@ def build_pdf(variant: str, vf, path: Path) -> list[dict]:
         )
         c.drawImage(ImageReader(embedded), 72, height - 320, width=250, height=80)
 
+    elif variant == "rotated":
+        # /Rotate turns the page when shown: boxes placed in unrotated page space land beside the text.
+        c.setPageRotation(vf.rng.choice([90, 270]))
+        person = _seed(entries, "PERSON", vf.person(), "text_layer")
+        phone = _seed(entries, "PHONE", vf.phone(), "text_layer")
+        email = _seed(entries, "EMAIL", vf.email(), "text_layer")
+        c.setFont("Helvetica", 12)
+        for i, line in enumerate([vf.filler_sentence(), f"Name: {person}", f"Phone: {phone}", f"Email: {email}"]):
+            c.drawString(72, height - 72 - 18 * i, line)
+
+    elif variant == "cropped":
+        # A CropBox shows only part of the page, so page space and shown pixels differ by its origin.
+        c.setCropBox((100, 100, width - 60, height - 60))
+        person = _seed(entries, "PERSON", vf.person(), "text_layer")
+        sin = _seed(entries, "CA_SIN", vf.ca_sin(), "text_layer")
+        iban = _seed(entries, "IBAN", vf.iban(), "text_layer")
+        c.setFont("Helvetica", 12)
+        for i, line in enumerate([vf.filler_sentence(), f"Employee: {person}", f"SIN: {sin}", f"Payroll IBAN: {iban}"]):
+            c.drawString(160, height - 140 - 18 * i, line)
+
     c.showPage()
     c.save()
     return entries
@@ -131,6 +151,39 @@ def _qr_image(payload: str, scale: int = 6) -> Image.Image:
     bitmap = zxingcpp.write_barcode_to_image(barcode, scale=scale)
     h, w = bitmap.shape  # avoid a numpy dependency: read via the buffer protocol
     return Image.frombuffer("L", (w, h), bytes(bitmap), "raw", "L", 0, 1).convert("RGB")
+
+
+SCREEN = (3840, 2160)
+SCREEN_FONT = ImageFont.load_default(size=14)  # desktop UI text at 100% scaling
+SCREEN_BG, SCREEN_PANEL, SCREEN_TEXT = (32, 33, 36), (48, 49, 54), (225, 225, 225)
+
+
+def build_screenshot(vf, path: Path) -> list[dict]:
+    """A dark-mode 4K chat window with small text spread to every edge.
+
+    Read whole, it only works at full size: shrunk to 2000 px, 14 px text drops below what
+    the OCR detector can see, so this catches any reader (redactor or verifier) that shrinks.
+    """
+    entries: list[dict] = []
+    img = Image.new("RGB", SCREEN, SCREEN_BG)
+    d = ImageDraw.Draw(img)
+    d.rectangle((0, 0, 420, SCREEN[1]), fill=SCREEN_PANEL)  # the conversation list
+    person = _seed(entries, "PERSON", vf.person(), "screenshot")
+    d.text((24, 60), f"Chat with {person}", font=SCREEN_FONT, fill=SCREEN_TEXT)
+    lines = [
+        vf.filler_sentence(),
+        f"My email is {_seed(entries, 'EMAIL', vf.email(), 'screenshot')}",
+        f"Call me on {_seed(entries, 'PHONE', vf.phone(), 'screenshot')}",
+        vf.filler_sentence(),
+    ]
+    for i, line in enumerate(lines):
+        d.text((480, 120 + 36 * i), line, font=SCREEN_FONT, fill=SCREEN_TEXT)
+    card = _seed(entries, "CREDIT_CARD", vf.credit_card(), "screenshot")
+    d.text((SCREEN[0] - 520, SCREEN[1] // 2), f"Card: {card}", font=SCREEN_FONT, fill=SCREEN_TEXT)
+    key = _seed(entries, "API_KEY", vf.api_key(vf.rng.choice(["aws", "github", "slack"])), "screenshot")  # one line: no PEM
+    d.text((480, SCREEN[1] - 60), f"export TOKEN={key}", font=SCREEN_FONT, fill=SCREEN_TEXT)
+    img.save(path, format="PNG")
+    return entries
 
 
 def build_image(fmt: str, vf, path: Path) -> list[dict]:
