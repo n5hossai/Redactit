@@ -21,8 +21,9 @@ from .patterns import (
     PHONE,
     UK_NINO,
     CaSinRecognizer,
+    CardDigitsRecognizer,
+    GluedIbanRecognizer,
     UsSsnRecognizer,
-    WrappedCardRecognizer,
 )
 from .secrets import ApiKeyRecognizer
 
@@ -50,7 +51,8 @@ class Detector:
         recognizers = [
             # Luhn-checked, plus the Mastercard 2-series range Presidio's regex lacks.
             CreditCardRecognizer(patterns=CreditCardRecognizer.PATTERNS + [MASTERCARD_2_SERIES]),
-            WrappedCardRecognizer(),
+            CardDigitsRecognizer(),
+            GluedIbanRecognizer(),
             IbanRecognizer(supported_entity="IBAN"),  # mod-97 checked
             CaSinRecognizer(),
             UsSsnRecognizer(),

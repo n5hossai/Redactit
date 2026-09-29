@@ -458,3 +458,21 @@ def test_card_numbers_wrapped_across_a_line(det, text, card):
 
 def test_wrapped_digits_that_fail_luhn_are_not_cards(det):
     assert not [s for s in _spans_of(det, "Order 1234567\n12345678", "CREDIT_CARD") if s.validated]
+
+
+# --- OCR often drops the space between a label and its value. ------------------------------
+
+@pytest.mark.parametrize("text, value, entity", [
+    ("IBANGB82WEST12345698765432PPCF581535", "GB82WEST12345698765432", "IBAN"),
+    ("IBANGB82WEST12345698765432PPCF581535", "CF581535", "PASSPORT"),
+    ("Card4111111111111111thanks", "4111111111111111", "CREDIT_CARD"),
+    ("SSN219-09-9999end", "219-09-9999", "US_SSN"),
+    ("Phone5551234567", "5551234567", "PHONE"),
+    ("NIAB123456C", "AB123456C", "UK_NINO"),
+])
+def test_values_glued_to_a_label(det, text, value, entity):
+    assert _covers(_spans_of(det, text, entity), text, value)
+
+
+def test_a_glued_iban_must_pass_mod97(det):
+    assert not [s for s in _spans_of(det, "REFGB82WEST12345698765433", "IBAN") if s.detector == "glued_iban"]

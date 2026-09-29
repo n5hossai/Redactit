@@ -8,7 +8,7 @@ threshold when a cue word or table header says what they are (see registry.py).
 from __future__ import annotations
 
 import regex as re
-from presidio_analyzer import Pattern, PatternRecognizer
+from presidio_analyzer import EntityRecognizer, Pattern, PatternRecognizer, RecognizerResult
 
 MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?"
 DASH = r"[\s.\-–—]"  # space, dot, hyphen, en dash, em dash
@@ -36,19 +36,65 @@ MASTERCARD_2_SERIES = Pattern(
 )
 
 
-class WrappedCardRecognizer(PatternRecognizer):
-    """A card number broken across one line break, as PDF text layers and OCR produce when
-    a line wraps mid-number. Presidio's card patterns stop at the break; Luhn still applies.
+class CardDigitsRecognizer(PatternRecognizer):
+    """Card numbers Presidio's word-anchored patterns miss: broken across one line break (PDF
+    text layers and OCR wrap mid-number) or glued to a label because OCR dropped the space
+    ("Card4111..."). Luhn and a 13-19 digit length still apply.
     """
 
-    PATTERNS = [Pattern("Card across a line break", r"\b(?:\d[ -]?){4,15}\r?\n[^\S\n]*(?:\d[ -]?){2,15}\d\b", 0.8)]
+    PATTERNS = [
+        Pattern("Card across a line break", r"(?<!\d)(?:\d[ -]?){4,15}\r?\n[^\S\n]*(?:\d[ -]?){2,15}\d(?!\d)", 0.8),
+        Pattern("Card glued to text", r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)", 0.8),
+    ]
 
     def __init__(self) -> None:
-        super().__init__(supported_entity="CREDIT_CARD", patterns=self.PATTERNS, name="wrapped_card_pattern")
+        super().__init__(supported_entity="CREDIT_CARD", patterns=self.PATTERNS, name="card_digits_pattern")
 
     def validate_result(self, pattern_text: str) -> bool:
         digits = re.sub(r"\D", "", pattern_text)
         return 13 <= len(digits) <= 19 and _luhn_ok(digits)
+
+
+# Official IBAN length per country (SWIFT IBAN registry).
+IBAN_LENGTHS = {
+    "AD": 24, "AE": 23, "AL": 28, "AT": 20, "AZ": 28, "BA": 20, "BE": 16, "BG": 22, "BH": 22, "BR": 29,
+    "BY": 28, "CH": 21, "CR": 22, "CY": 28, "CZ": 24, "DE": 22, "DK": 18, "DO": 28, "EE": 20, "EG": 29,
+    "ES": 24, "FI": 18, "FO": 18, "FR": 27, "GB": 22, "GE": 22, "GI": 23, "GL": 18, "GR": 27, "GT": 28,
+    "HR": 21, "HU": 28, "IE": 22, "IL": 23, "IQ": 23, "IS": 26, "IT": 27, "JO": 30, "KW": 30, "KZ": 20,
+    "LB": 28, "LC": 32, "LI": 21, "LT": 20, "LU": 20, "LV": 21, "MC": 27, "MD": 24, "ME": 22, "MK": 19,
+    "MR": 27, "MT": 31, "MU": 30, "NL": 18, "NO": 15, "PK": 24, "PL": 28, "PS": 29, "PT": 25, "QA": 29,
+    "RO": 24, "RS": 22, "SA": 24, "SC": 31, "SE": 24, "SI": 19, "SK": 24, "SM": 27, "ST": 25, "SV": 28,
+    "TL": 23, "TN": 24, "TR": 26, "UA": 29, "VA": 22, "VG": 24, "XK": 20,
+}
+
+
+def _iban_ok(iban: str) -> bool:
+    rearranged = iban[4:] + iban[:4]
+    return int("".join(str(int(c, 36)) for c in rearranged)) % 97 == 1
+
+
+class GluedIbanRecognizer(EntityRecognizer):
+    """IBANs glued to the text before them ("IBANGB69VMDF..."), which OCR produces and
+    Presidio's word-anchored pattern misses. Every position is tried at its country's exact
+    length and must pass mod-97, so a false match is roughly a 1-in-97 chance per candidate
+    that already has a valid country code, two check digits and the right length.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(supported_entities=["IBAN"], name="glued_iban")
+
+    def load(self) -> None:
+        pass
+
+    def analyze(self, text: str, entities, nlp_artifacts=None) -> list[RecognizerResult]:
+        results = []
+        for m in re.finditer(r"(?=([A-Z]{2})\d{2})", text):
+            n = IBAN_LENGTHS.get(m.group(1), 0)
+            candidate = text[m.start():m.start() + n]
+            if n and re.fullmatch(r"[A-Z0-9]+", candidate) and len(candidate) == n and _iban_ok(candidate):
+                results.append(RecognizerResult("IBAN", m.start(), m.start() + n, 1.0,
+                                                recognition_metadata={RecognizerResult.RECOGNIZER_NAME_KEY: self.name}))
+        return results
 
 
 def _recognizer(entity: str, patterns: list[Pattern], flags=re.MULTILINE) -> PatternRecognizer:
@@ -64,7 +110,8 @@ class CaSinRecognizer(PatternRecognizer):
     regex excludes them up front; `invalidate_result` then drops anything that fails Luhn.
     """
 
-    PATTERNS = [Pattern("CA_SIN", r"\b[1-79]\d{2}[- ]?\d{3}[- ]?\d{3}\b", 0.4)]
+    # Digit lookarounds instead of \b: OCR glues labels to values ("SIN046454286").
+    PATTERNS = [Pattern("CA_SIN", r"(?<!\d)[1-79]\d{2}[- ]?\d{3}[- ]?\d{3}(?!\d)", 0.4)]
 
     def __init__(self) -> None:
         super().__init__(supported_entity="CA_SIN", patterns=self.PATTERNS, global_regex_flags=re.MULTILINE)
@@ -82,10 +129,10 @@ class UsSsnRecognizer(PatternRecognizer):
     """
 
     PATTERNS = [
-        Pattern("SSN separated", r"\b\d{3}[\s.-]\d{2}[\s.-]\d{4}\b", 0.6),
+        Pattern("SSN separated", r"(?<!\d)\d{3}[\s.-]\d{2}[\s.-]\d{4}(?!\d)", 0.6),
         # 0.35 clears the locked-type threshold: an unlabelled 9-digit run is masked, since
         # it may be an SSN, passport or account number and over-redaction is the safe side.
-        Pattern("SSN bare", r"\b\d{9}\b", 0.35),
+        Pattern("SSN bare", r"(?<!\d)\d{9}(?!\d)", 0.35),
     ]
 
     def __init__(self) -> None:
@@ -100,14 +147,15 @@ class UsSsnRecognizer(PatternRecognizer):
 # format is specific enough to score high in any case and with any grouping.
 UK_NINO = _recognizer("UK_NINO", [Pattern(
     "UK NINO",
-    r"\b(?!BG|GB|KN|NK|NT|TN|ZZ)[A-CEGHJ-PR-TW-Z][A-CEGHJ-NPR-TW-Z](?:[\s-]?\d{2}){3}[\s-]?[A-D]\b",
+    r"(?<!\d)(?!BG|GB|KN|NK|NT|TN|ZZ)[A-CEGHJ-PR-TW-Z][A-CEGHJ-NPR-TW-Z](?:[\s-]?\d{2}){3}[\s-]?[A-D]\b",
     0.85,
 )], re.MULTILINE | re.IGNORECASE)
 
 # CA (2 letters + 6 digits), UK/GB (1 letter + 8 digits) and US (9 digits) passports. Only
 # the lettered form scores above zero on its own; the "passport" cue does the rest.
 PASSPORT = _recognizer("PASSPORT", [
-    Pattern("Passport lettered", r"\b[A-Z]{1,2}[\s-]?\d{6,8}\b", 0.35),
+    # No boundary before the letters: OCR glues "PP CF581535" into "PPCF581535".
+    Pattern("Passport lettered", r"(?<!\d)[A-Z]{1,2}[\s-]?\d{6,8}(?!\d)", 0.35),
     Pattern("Passport bare digits", r"\b\d{9}\b", 0.35),  # same reasoning as a bare SSN
 ], re.MULTILINE | re.IGNORECASE)
 
@@ -135,17 +183,18 @@ EMAIL = _recognizer("EMAIL", [Pattern(
 PHONE = _recognizer("PHONE", [
     Pattern(
         "Phone with area code",
-        rf"(?<![\w+])(?:\+\d{{1,3}}{DASH}?|00\d{{1,3}}{DASH}?|1{DASH})?(?:\(0\)\s?)?"
+        # Digit lookarounds, not word ones: OCR glues labels to numbers ("Phone5551234567").
+        rf"(?<![\d+])(?:\+\d{{1,3}}{DASH}?|00\d{{1,3}}{DASH}?|1{DASH})?(?:\(0\)\s?)?"
         rf"(?:\(\d{{2,5}}\){DASH}?|\d{{2,5}}{DASH})\d{{3,4}}{DASH}?\d{{3,4}}"
-        r"(?:\s?(?:x|ext\.?|#)\s?\d{1,6})?(?!\w)",
+        r"(?:\s?(?:x|ext\.?|#)\s?\d{1,6})?(?!\d)",
         0.8,
     ),
     # International numbers grouped in pairs or triples, e.g. +33 6 12 34 56 78.
-    Pattern("Phone international", rf"(?<![\w+])\+\d{{1,3}}(?:{DASH}?\d{{1,4}}){{3,6}}(?!\w)", 0.8),
-    Pattern("Phone E.164", r"(?<![\w+])\+\d{10,14}(?!\w)", 0.8),
+    Pattern("Phone international", rf"(?<![\d+])\+\d{{1,3}}(?:{DASH}?\d{{1,4}}){{3,6}}(?!\d)", 0.8),
+    Pattern("Phone E.164", r"(?<![\d+])\+\d{10,14}(?!\d)", 0.8),
     # Bare 10-11 digits are usually a phone; other long numbers (account ids, timestamps)
     # get masked as PHONE too, which is the safe direction to be wrong in.
-    Pattern("Phone bare digits", r"(?<![\w+])\d{10,11}(?!\w)", 0.6),
+    Pattern("Phone bare digits", r"(?<![\d+])\d{10,11}(?!\d)", 0.6),
     Pattern("Phone local 7 digits", rf"(?<![\w+-])\d{{3}}[-.–]\d{{4}}(?![\w-])", 0.5),
 ], re.IGNORECASE)
 
