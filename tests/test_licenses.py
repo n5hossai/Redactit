@@ -17,7 +17,8 @@ FLAGGED = {
     # LGPL parts stay separate, unmodified libraries; THIRD_PARTY_NOTICES.md covers them.
     "numpy": "BSD/MIT/Zlib/CC0 parts plus the GCC runtime library exception",
     "tqdm": "MPL-2.0 AND MIT: file-level copyleft on tqdm's own files, used unmodified",
-    "opencv-python": "Apache-2.0, but the wheel bundles FFmpeg (LGPL-2.1) as a separate DLL",
+    # Headless build only (pyproject overrides rapidocr's GUI build, which adds Qt and more LGPL).
+    "opencv-python-headless": "Apache-2.0, but the wheel bundles FFmpeg (LGPL-2.1) as a separate DLL",
     "shapely": "BSD-3, but the wheel bundles GEOS (LGPL-2.1) as a separate library",
     # Runtime from Phase 3. Its GPL mentions are ICU's autoconf macros (GPL with the
     # Autoconf exception, build scripts only) and the LLVM exception clause naming GPLv2.

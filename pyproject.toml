@@ -12,6 +12,7 @@ dependencies = [
     "en-core-web-sm",
     "keyring==25.7.0",
     "onnxruntime==1.30.0",
+    "opencv-python-headless==5.0.0.93",
     "pillow==12.3.0",
     "platformdirs==4.12.0",
     "presidio-analyzer==2.2.364",
@@ -34,6 +35,9 @@ leak = ["Faker==40.39.0", "reportlab==5.0.1"]
 
 [tool.uv]
 default-groups = ["dev", "leak"]
+# rapidocr asks for the GUI build of OpenCV, whose Linux and macOS wheels also bundle Qt
+# and other LGPL libraries; the headless build (a direct dependency) provides the same cv2.
+override-dependencies = ["opencv-python; sys_platform == 'never'"]
 
 [tool.uv.sources]
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
