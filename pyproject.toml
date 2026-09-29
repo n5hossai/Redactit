@@ -12,12 +12,16 @@ dependencies = [
     "en-core-web-sm",
     "keyring==25.7.0",
     "onnxruntime==1.30.0",
+    "pillow==12.3.0",
     "platformdirs==4.12.0",
     "presidio-analyzer==2.2.364",
     "pydantic==2.13.5",
+    "pypdfium2==5.13.0",
     "pyyaml==6.0.3",
+    "rapidocr-onnxruntime==1.4.4",
     "spacy==3.8.16",
     "tokenizers==0.23.2",
+    "zxing-cpp==3.1.1",
 ]
 
 [project.scripts]
@@ -26,10 +30,7 @@ redactit = "redactit.cli:main"
 [dependency-groups]
 dev = ["pytest==9.1.1", "pytest-socket==0.8.1"]
 # Builds the synthetic corpus and re-extracts outputs for the leak test. Never shipped.
-leak = [
-  "Faker==40.39.0", "reportlab==5.0.1", "Pillow==12.3.0", "zxing-cpp==3.1.1",
-  "pypdfium2==5.13.0", "rapidocr-onnxruntime==1.4.4",
-]
+leak = ["Faker==40.39.0", "reportlab==5.0.1"]
 
 [tool.uv]
 default-groups = ["dev", "leak"]

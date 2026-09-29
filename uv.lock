@@ -857,12 +857,16 @@ dependencies = [
     { name = "en-core-web-sm" },
     { name = "keyring" },
     { name = "onnxruntime" },
+    { name = "pillow" },
     { name = "platformdirs" },
     { name = "presidio-analyzer" },
     { name = "pydantic" },
+    { name = "pypdfium2" },
     { name = "pyyaml" },
+    { name = "rapidocr-onnxruntime" },
     { name = "spacy" },
     { name = "tokenizers" },
+    { name = "zxing-cpp" },
 ]
 
 [package.dev-dependencies]
@@ -872,11 +876,7 @@ dev = [
 ]
 leak = [
     { name = "faker" },
-    { name = "pillow" },
-    { name = "pypdfium2" },
-    { name = "rapidocr-onnxruntime" },
     { name = "reportlab" },
-    { name = "zxing-cpp" },
 ]
 
 [package.metadata]
@@ -886,12 +886,16 @@ requires-dist = [
     { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "keyring", specifier = "==25.7.0" },
     { name = "onnxruntime", specifier = "==1.30.0" },
+    { name = "pillow", specifier = "==12.3.0" },
     { name = "platformdirs", specifier = "==4.12.0" },
     { name = "presidio-analyzer", specifier = "==2.2.364" },
     { name = "pydantic", specifier = "==2.13.5" },
+    { name = "pypdfium2", specifier = "==5.13.0" },
     { name = "pyyaml", specifier = "==6.0.3" },
+    { name = "rapidocr-onnxruntime", specifier = "==1.4.4" },
     { name = "spacy", specifier = "==3.8.16" },
     { name = "tokenizers", specifier = "==0.23.2" },
+    { name = "zxing-cpp", specifier = "==3.1.1" },
 ]
 
 [package.metadata.requires-dev]
@@ -901,11 +905,7 @@ dev = [
 ]
 leak = [
     { name = "faker", specifier = "==40.39.0" },
-    { name = "pillow", specifier = "==12.3.0" },
-    { name = "pypdfium2", specifier = "==5.13.0" },
-    { name = "rapidocr-onnxruntime", specifier = "==1.4.4" },
     { name = "reportlab", specifier = "==5.0.1" },
-    { name = "zxing-cpp", specifier = "==3.1.1" },
 ]
 
 [[package]]

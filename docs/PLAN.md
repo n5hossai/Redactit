@@ -261,15 +261,15 @@ are committed.
 | defusedxml | PSF-2.0 | Permissive; the standard defence against XML entity attacks in untrusted DOCX |
 | torch (only if option (a) in 3.1 is chosen) | BSD-3 plus bundled libraries | Bundled Intel MKL license is **unverified**; must be checked before it is accepted |
 | pypdfium2 | BSD-3 / Apache-2.0; bundled PDFium notices mention GPL | Mentions are ICU's autoconf macros (GPL with the Autoconf exception, build scripts only) and the LLVM exception clause; no copyleft code in the binary |
-| OpenCV wheels (runtime from Phase 3: RapidOCR, YuNet) | Apache-2.0, but every wheel bundles FFmpeg (LGPL-2.1) as a separate DLL | **Open decision for Phase 3.** LGPL permits unmodified dynamic use. The alternative is building OpenCV without video I/O. |
+| OpenCV wheels (runtime from Phase 3: RapidOCR, YuNet) | Apache-2.0, but every wheel bundles FFmpeg (LGPL-2.1) as a separate DLL | **Accepted by the owner (option A).** LGPL permits unmodified dynamic use in closed or open products; `THIRD_PARTY_NOTICES.md` carries the license texts and the exact source links. Before a commercial release, a lawyer should check codec patents in the bundled FFmpeg (Redactit never decodes video). Fallbacks if needed: OpenCV built without FFmpeg, or Tesseract. |
 
 Runtime exceptions accepted by the owner (used unmodified; obligations attach only to
 changes in their own files): certifi (MPL-2.0, via requests/httpx), setuptools (MIT, vendoring
 LGPL-3 and MPL-2.0 files, required by spaCy), typing-extensions (PSF-2.0).
 
-Test-only exceptions (never shipped), enforced in `tests/test_licenses.py`: numpy
-(BSD/MIT/Zlib/CC0 plus the GCC runtime exception), tqdm (MPL-2.0 AND MIT), opencv-python
-(bundled FFmpeg, LGPL), shapely (bundled GEOS, LGPL). All arrive via `rapidocr-onnxruntime`.
+Also shipped from Phase 3 via `rapidocr-onnxruntime`, enforced in `tests/test_licenses.py`:
+numpy (BSD/MIT/Zlib/CC0 plus the GCC runtime exception), tqdm (MPL-2.0 AND MIT), shapely
+(bundled GEOS, LGPL-2.1).
 
 Excluded after checking: PyMuPDF and Ghostscript (AGPL), `img2pdf` (LGPL-3), `python-stdnum`
 (LGPL-2.1+), `zbar` behind `pyzbar` (LGPL-2.1), PyAV (removed with audio).

@@ -9,7 +9,7 @@ from redactit.audit import AuditLog
 from redactit.detect.ner import GlinerNer
 from redactit.detect.registry import Detector
 from redactit.policy import Policy
-from redactit.pseudonym import Pseudonymizer, apply
+from redactit.pseudonym import Pseudonymizer, replacements, splice
 from redactit.types import Decision, Span
 from redactit.vault import Vault
 
@@ -17,7 +17,8 @@ from redactit.vault import Vault
 @dataclass(frozen=True)
 class Result:
     text: str
-    decisions: list[Decision]  # offsets index into the original input text
+    decisions: list[Decision]  # sorted by start; offsets index into the original input text
+    replacements: list[str]  # what each decision became, e.g. "[PERSON_1]" or "****"
 
 
 class Engine:
@@ -44,7 +45,9 @@ class Engine:
         clean, where = _canonical(text)
         spans = _join_address_fragments(clean, self.detector.detect(clean) + self.ner.detect(clean))
         decisions = [_to_source(d, where) for d in self.policy.decide(clean, spans, site)]
-        result = Result(apply(text, decisions, Pseudonymizer(self.vault, scope)), decisions)
+        decisions.sort(key=lambda d: d.span.start)
+        subs = replacements(text, decisions, Pseudonymizer(self.vault, scope))
+        result = Result(splice(text, decisions, subs), decisions, subs)
         if self.audit:
             self.audit.write(
                 "redaction",
