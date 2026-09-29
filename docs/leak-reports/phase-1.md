@@ -60,3 +60,49 @@ Metadata / text-layer violations: **18**.
 | txt/PHONE | 2 | 0 | 0% |
 
 Precision: not measured (no --spans file)
+
+## Edge cases, shown
+
+Each screenshot is a corpus input with the harness's detections drawn on it. A value is boxed
+where the verifier read it back, labelled with the extraction path that caught it. All values
+are synthetic (Faker, seed 1234).
+
+### Image: OCR, rotation, low contrast, QR payload, EXIF
+
+![Image edge cases](phase-1/image-edge-cases.png)
+
+- Grey low-contrast card number, 12-degree IBAN and vertical passport number are all read by
+  OCR, which runs at 0, 90 and 270 degrees plus a 2x upscale.
+- The QR code is decoded, and its payload (email + phone) is matched like any other text.
+- EXIF `Artist`/`ImageDescription` hold a name and an email, and a GPS block is present. The
+  metadata dump catches the values, and any EXIF at all counts as a violation.
+
+### PDF with no text layer (scanned)
+
+![Scanned PDF](phase-1/pdf-scanned.png)
+
+The text layer is empty, so only the 300 DPI render plus OCR can see these values. A verifier
+that read only the text layer would report zero leaks here.
+
+### PDF with text in an embedded image (mixed)
+
+![Mixed PDF](phase-1/pdf-mixed.png)
+
+Blue values are in the text layer *and* visible to OCR. Green values exist only inside an
+embedded image: the text layer has no trace of them, and OCR catches them.
+
+### PDF with values wrapped across lines
+
+![Split lines PDF](phase-1/pdf-split-lines.png)
+
+The card number and address each break across two lines. Matching drops separators and line
+breaks before comparing, so the split value still counts as one surviving value.
+
+### DOCX parts a naive text extractor misses
+
+| Where | XML excerpt (synthetic) | Caught because |
+|---|---|---|
+| Comment and its author | `<w:comment w:author="Roger Moore" …><w:t>Please double check Miss Leanne Davies at elara@example.net.</w:t>` | every XML part is read, attribute values included |
+| Tracked deletion | `<w:del w:author="Nicole Vazquez" …><w:delText>4004 6554 9692 6600</w:delText></w:del>` | deleted text is still in the file, so it is extracted too |
+| Value split across runs | `<w:r><w:t>ZR83</w:t></w:r><w:r><w:t>6708D</w:t></w:r>` | tags are stripped before matching, so adjacent runs join into `ZR836708D` |
+| Document properties | `<dc:creator>Heather Watson</dc:creator><cp:lastModifiedBy>Albert Rowe</cp:lastModifiedBy>` | `docProps/core.xml` is read like every other part |
