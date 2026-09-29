@@ -14,7 +14,7 @@ try:
 except models.ModelError:
     pytest.skip("models not installed; run `redactit setup-models`", allow_module_level=True)
 
-from redact_corpus import SUPPORTED, redact_corpus  # noqa: E402
+from redact_corpus import TEXT_FORMATS, redact_corpus  # noqa: E402
 
 
 # Seed 1234 holds "Ms Carolyn Jones", a name the model once scored just under threshold.
@@ -28,7 +28,7 @@ def corpus(request, tmp_path_factory):
 @pytest.mark.parametrize("dial", [3, 5], ids=["admin floor", "tightest"])
 def test_no_seeded_value_survives(corpus, tmp_path, dial):
     redact_corpus(corpus, tmp_path, dial)
-    result = leak.run(corpus, tmp_path, tmp_path / "spans.jsonl", SUPPORTED)
+    result = leak.run(corpus, tmp_path, tmp_path / "spans.jsonl", TEXT_FORMATS)
 
     assert result["survivors"] == []
     assert result["violations"] == []
