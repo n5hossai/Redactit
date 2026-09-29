@@ -212,6 +212,26 @@ def test_a_span_over_two_lines_gets_a_box_on_each(monkeypatch):
     assert {b.label for b in find_boxes(Image.new("RGB", (200, 100)), engine, "t")[0]} == {None}
 
 
+def test_masking_prints_the_label_once_and_keeps_later_characters_in_place():
+    line = ocr.Line("Contact Priya Okafor now", ((0, 0), (240, 0), (240, 10), (0, 10)))  # 10 px per character
+    name, surname = ((80, 0), (200, 0), (200, 10), (80, 10)), ((140, 0), (200, 0), (200, 10), (140, 10))
+    labelled = image._mask(line, [Box(name, "[PERSON_1]")])
+    assert labelled.text == "Contact [PERSON_1] now"
+    start = labelled.text.index("now")
+    assert [round(p[0]) for p in ocr.char_quad(labelled, start, start + 3)[:2]] == [210, 240]
+    assert image._mask(line, [Box(surname, None)]).text == "Contact Priya ██████ now"
+
+
+def test_text_under_a_box_the_caller_fills_is_masked_in_the_text(engine):
+    """A PDF's text-layer boxes are passed in, so its Markdown never shows what its page hides."""
+    img = Image.new("RGB", (900, 80), "white")
+    ImageDraw.Draw(img).text((20, 20), "Case ref XJ-4410 closed", font=FONT, fill="black")
+    (line,) = ocr.read_lines(img)
+    start = line.text.index("XJ")
+    _, text = find_boxes(img, engine[0], "t", covered=[Box(ocr.char_quad(line, start, start + 7), None)])
+    assert "XJ" not in text and "4410" not in text and "█" in text and "Case ref" in text and "closed" in text
+
+
 def test_paint_fills_padded_boxes_on_a_copy_and_labels_them():
     img = Image.new("RGB", (300, 100), "white")
     quad = ((50, 40), (250, 40), (250, 60), (50, 60))

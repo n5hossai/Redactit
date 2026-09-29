@@ -45,7 +45,8 @@ def redact_pdf(data: bytes, engine, scope: str, *, destination: str = "cli") -> 
             raise PdfError(f"page {number} is too large to render safely")
         image = page.render(scale=scale).to_pil().convert("RGB")
         layer_boxes = _text_layer(page, image.size, engine, scope, destination)
-        pixel_boxes, visible_text = find_boxes(image, engine, scope, file_type="pdf", destination=destination)
+        pixel_boxes, visible_text = find_boxes(image, engine, scope, covered=layer_boxes, file_type="pdf",
+                                               destination=destination)
         _append_page(out, paint(image, layer_boxes + pixel_boxes), width, height)
         # The Markdown comes from what the page shows, not the text layer: text under a drawn
         # box or in white on white is invisible on the page and must not reappear here.

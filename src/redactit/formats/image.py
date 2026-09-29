@@ -36,11 +36,17 @@ class Box:
     label: str | None  # replacement to print on the box, e.g. "[PERSON_1]"; None = plain fill
 
 
-def find_boxes(img: Image.Image, engine, scope: str, *, file_type: str = "png",
+def find_boxes(img: Image.Image, engine, scope: str, *, covered: list[Box] = (), file_type: str = "png",
                destination: str = "cli") -> tuple[list[Box], str]:
-    """Boxes to fill (sensitive OCR text, faces, barcodes) and the redacted OCR text."""
+    """Boxes to fill (sensitive OCR text, faces, barcodes) and the redacted OCR text.
+
+    `covered` are boxes the caller fills anyway (a PDF's text-layer finds). OCR characters
+    under them are masked before detection, so the text never shows what the picture hides:
+    OCR once read a boxed birth date as "Dateof birth:1951-04-07", and without its cue the
+    date was not found again.
+    """
     rgb = img if img.mode == "RGB" else img.convert("RGB")  # no copy of a 50 MP photo
-    lines = ocr.read_lines(rgb)
+    lines = [_mask(line, covered) for line in ocr.read_lines(rgb)] if covered else ocr.read_lines(rgb)
     boxes, redacted = [], ""
     if lines:
         text = "\n".join(line.text for line in lines)
@@ -109,6 +115,38 @@ def _load(data: bytes) -> tuple[Image.Image, str]:
         return (img if img.mode == "RGB" else img.convert("RGB")), fmt
     except (OSError, ValueError, SyntaxError):
         raise ImageError("the file is not a readable image") from None
+
+
+def _mask(line: ocr.Line, boxes: list[Box]) -> ocr.Line:
+    """`line` with the characters under each (padded) box replaced by the box's label, or by
+    "█" when it has none. Each replacement is spread over the width it replaces, so the
+    characters after it keep their positions for the boxes found in this text later."""
+    quads, text, n = [_grow(b.quad) for b in boxes], line.text, len(line.text)
+
+    def owner(i: int) -> int | None:
+        q = ocr.char_quad(line, i, i + 1)
+        centre = sum(p[0] for p in q) / 4, sum(p[1] for p in q) / 4
+        return next((k for k, quad in enumerate(quads) if ocr._inside(centre, quad)), None)
+
+    owners = [None if c.isspace() else owner(i) for i, c in enumerate(text)]
+    for i in range(1, n - 1):  # a space inside one box is part of it: "Priya Okafor" gets one label
+        if owners[i] is None and text[i].isspace():
+            after = next((o for o, c in zip(owners[i + 1:], text[i + 1:]) if not c.isspace()), None)
+            if owners[i - 1] is not None and owners[i - 1] == after:
+                owners[i] = after
+    if not any(o is not None for o in owners):
+        return line
+    cuts = line.cuts if len(line.cuts) == n + 1 else [i / max(n, 1) for i in range(n + 1)]
+    out, out_cuts, i = [], [cuts[0]], 0
+    while i < n:
+        j = i + 1
+        while owners[i] is not None and j < n and owners[j] == owners[i]:
+            j += 1
+        piece = text[i] if owners[i] is None else (boxes[owners[i]].label or "█" * (j - i))
+        out.append(piece)
+        out_cuts += [cuts[i] + (cuts[j] - cuts[i]) * (t + 1) / len(piece) for t in range(len(piece))]
+        i = j
+    return ocr.Line("".join(out), line.quad, tuple(out_cuts))
 
 
 def _enabled(engine, entity_type: str) -> bool:
