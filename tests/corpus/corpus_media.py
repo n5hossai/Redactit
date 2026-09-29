@@ -24,6 +24,8 @@ PDF_VARIANTS = ["digital", "split_lines", "scanned", "mixed"]
 FONT_SIZE = 32  # capitals render ~23 px tall, lowercase ~18 px: RapidOCR reads both reliably
 _FONT = ImageFont.load_default(size=FONT_SIZE)
 LOW_CONTRAST_GRAY = (140, 140, 140)  # on white: contrast ratio ~3.36, still >=3:1
+FACES = Path(__file__).resolve().parents[1] / "fixtures" / "faces"
+FACE_SIZE = 280  # small enough for the free bottom-right corner, large enough for YuNet
 
 
 def _seed(entries: list[dict], entity_type: str, value: str, location: str) -> str:
@@ -174,6 +176,12 @@ def build_image(fmt: str, vf, path: Path) -> list[dict]:
     qr_phone = _seed(entries, "PHONE", vf.phone(), "qr_payload")
     qr_img = _qr_image(f"{qr_email} {qr_phone}")
     img.paste(qr_img, (20, y))
+
+    # A synthetic face in the bottom-right corner, clear of every block above.
+    face = vf.rng.choice(sorted(FACES.glob("*.jpg")))
+    with Image.open(face) as photo:
+        img.paste(photo.convert("RGB").resize((FACE_SIZE, FACE_SIZE)), (canvas_w - FACE_SIZE - 20, canvas_h - FACE_SIZE - 20))
+    _seed(entries, "FACE", face.name, "face")
 
     # EXIF: Artist=PERSON, ImageDescription=EMAIL, plus a GPS IFD for realism
     exif_person = _seed(entries, "PERSON", vf.person(), "exif")
