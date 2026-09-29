@@ -230,9 +230,16 @@ _TAIL = _UNIT_AFTER + r"(?:,[^\S\n]*[^,\n.;:!?]{2,40}){0,4}"
 # and hard-wrapped text break addresses after a comma ("2 Josh Plains," / "Vanessafort, S6 5WJ").
 # A part may continue across one line break only mid-word ("Va" / "nessafort", or a hyphen
 # break): a new line that starts a new word, like "Card: ...", must not join the address.
-_PART = r"[^,\n.;:!?|]{0,40}(?:(?:(?<=[A-Za-z])\r?\n(?=[a-z])|-\r?\n)[^,\n.;:!?|]{0,40})?"
+# A full stop ends a part only before a space or line end, so "Apt.044" (OCR) stays inside.
+_CHAR = r"(?:[^,\n.;:!?|]|\.(?=\S))"
+_PART = rf"{_CHAR}{{0,40}}(?:(?:(?<=[A-Za-z])\r?\n(?=[a-z])|-\r?\n){_CHAR}{{0,40}})?"
 _BEFORE = rf"(?:{_PART},\s*){{0,3}}(?:{_PART}[^\S\n]?)?"  # OCR may glue the last part on ("SKR3P1B2")
 _D4 = r"\d(?:\s*\d){3}"  # four digits, possibly broken by a line wrap
+# US states, DC, territories and military "states", with the letters OCR confuses them with
+# ("VI" read as "Vl"): the ZIP rule below must still fire on a misread code.
+_US_STATE = "|".join(code.replace("I", "[Il1]").replace("O", "[O0]") for code in (
+    "AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND "
+    "OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY AS GU MP PR VI UM AA AE AP").split())
 ADDRESS = _recognizer("ADDRESS", [
     Pattern("Street, number first",
             rf"\b{_UNIT}\d{{1,5}}[A-Za-z]?,?\s+(?:[A-Z][\w'-]*\s+){{0,4}}{_STREET_TYPE}\b\.?{_TAIL}", 0.75),
@@ -243,7 +250,7 @@ ADDRESS = _recognizer("ADDRESS", [
     # may break across a line ("Box 47" / "75, APO ..."), as PDF text layers wrap mid-number.
     Pattern("Military address",
             rf"\b(?:(?:USNS|USNV|USS|USCGC)\s+[A-Z][\w'-]*(?:\s[A-Z][\w'-]*)?|PSC\s+{_D4},?\s+Box\s+{_D4}"
-            rf"|Unit\s+{_D4},?\s+Box\s+{_D4})\s*[,\n]\s*(?:APO|FPO|DPO)\s+(?:AA|AE|AP)\s+\d(?:\s*\d){{4}}(?!\d)", 0.9),
+            rf"|Unit\s+{_D4},?\s+Box\s+{_D4})\s*[,\n]\s*(?:APO|FPO|DPO)\s*(?:AA|AE|AP)\s*\d(?:\s*\d){{4}}(?!\d)", 0.9),
     Pattern("PO box", rf"\b(?:P\.?\s?O\.?\s?Box|Post\s+Office\s+Box)\s+\d+{_TAIL}", 0.75),
     Pattern("Numbered unit", rf"\b(?:Unit|Suite|Flat|Apartment)\s+\d+[A-Za-z]?{_TAIL}", 0.6),
     # A postcode locates a person to a street in the UK and Canada, so it is redacted with
@@ -251,4 +258,7 @@ ADDRESS = _recognizer("ADDRESS", [
     # Digit lookarounds, not \b: OCR glues the province or town to the code ("SKR3P1B2").
     Pattern("UK postcode", _BEFORE + r"(?<!\d)[A-Z]{1,2}\d[A-Z\d]?\s*\d[ABD-HJLNP-UW-Z]{2}(?![a-z0-9])", 0.55),
     Pattern("CA postal code", _BEFORE + r"(?<!\d)[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\s?\d[ABCEGHJ-NPRSTV-Z]\d(?!\d)", 0.55),
+    # A US ZIP alone covers thousands of people, so the rule needs "town, ST 12345" after at
+    # least one comma-separated part; the street line in front of it is taken too.
+    Pattern("US state and ZIP", rf"(?:{_PART},\s*){{1,3}}(?<![A-Za-z])(?:{_US_STATE})\s*\d{{5}}(?:-\d{{4}})?(?!\d)", 0.55),
 ])

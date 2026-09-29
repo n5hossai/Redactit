@@ -491,9 +491,16 @@ def test_a_glued_iban_is_only_validated_when_it_passes_mod97(det):
     ("1678WallerInlet,EastMatthew,SKR3P1B2", "1678WallerInlet,EastMatthew,SKR3P1B2"),
     ("Address: 2 Josh Plains, Va\r\nnessafort, S6 5WJ", "2 Josh Plains, Va\r\nnessafort, S6 5WJ"),  # mid-word wrap
     ("Address: PSC 6319, Box 47\r\n75, APO AP 11657", "PSC 6319, Box 47\r\n75, APO AP 11657"),
+    ("Address: USNS Green,\nFPOAE26947", "USNS Green,\nFPOAE26947"),
+    # "Crest" is no known street type; the state (read "Vl" for "VI") and ZIP carry the line.
+    ("Address: 1505 Combs Crest Apt.044, Calvinfurt, Vl 77725", "1505 Combs Crest Apt.044, Calvinfurt, Vl 77725"),
 ])
 def test_addresses_wrapped_or_glued_by_ocr(det, text, addr):
     assert _covers(_spans_of(det, text, "ADDRESS"), text, addr)
+
+
+def test_a_us_zip_needs_a_town_before_it(det):
+    assert not _spans_of(det, "Form VA 12345 is due. Order 55, total 12345.", "ADDRESS")
 
 
 def test_an_iban_in_printed_groups_is_covered_whole(det):
