@@ -26,6 +26,11 @@ UPSCALE, UPSCALE_SIDE = 2.0, 2000  # the upscale pass is for small images only; 
 MIN_UPSCALE = 1.25  # a smaller gain is not worth another pass
 CONFIDENT = 0.9  # a read this sure of itself is not read again at another orientation or scale
 ASPECT = 4  # RapidOCR scales a thin image to a 736 px short side: slow at 8:1, and its resize fails near 100:1
+# Views larger than this are read without the memory pool. Inside one pass the pool keeps
+# every buffer it hands out: a 12 MP photo peaked at 5.7 GB with it and 3.45 GB without, at
+# 1.1 s more. A 4K screenshot (8.3 MP) keeps it: 3.5 GB against 2.8 GB, but 9.6 s faster at a
+# new size. This keeps every measured peak at or under about 3.5 GB.
+POOL_MAX_PIXELS = 9_000_000
 
 
 @dataclass(frozen=True)
@@ -55,15 +60,25 @@ def _engine():
         # against 3.6 s for the same one again. The arena is fixed when a session is built, so
         # the detector and recognizer are rebuilt from the same held files (the angle classifier
         # never runs: use_cls=False). _trim() hands the arena's memory back after each image.
+        # RapidOCR's own pool-less sessions are kept for views past POOL_MAX_PIXELS.
+        engine.sessions = []  # (holder, pooled session, RapidOCR's own session)
         for wrapper, name in ((engine.text_det.infer, "rapidocr/det.onnx"), (engine.text_rec.session, "rapidocr/rec.onnx")):
             options = ort.SessionOptions()
             options.log_severity_level = 4  # errors only, as RapidOCR sets it
             options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             options.enable_cpu_mem_arena = True
             options.intra_op_num_threads = physical_cores()  # the same choice as the name model (cores.py)
-            wrapper.session = ort.InferenceSession(
+            pooled = ort.InferenceSession(
                 str(paths[name]), options, providers=[("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"})])
+            engine.sessions.append((wrapper, pooled, wrapper.session))
+            wrapper.session = pooled
     return engine
+
+
+def _use_pool(on: bool) -> None:
+    """Point RapidOCR at the pooled sessions, or at its own pool-less ones (POOL_MAX_PIXELS)."""
+    for wrapper, pooled, plain in _engine().sessions:
+        wrapper.session = pooled if on else plain
 
 
 @cache
@@ -80,10 +95,8 @@ def _trim() -> None:
     1080p screenshot, on top of the engine. Shrinking happens at the end of a run, so each
     session runs once on a tiny blank input (about 50 ms in all). A new image then regrows the
     arena once and reuses it across its passes, which keeps nearly all of the arena's gain."""
-    engine = _engine()
-    for session, shape in ((engine.text_det.infer.session, (1, 3, 32, 32)),
-                           (engine.text_rec.session.session, (1, 3, 48, 32))):
-        session.run(None, {session.get_inputs()[0].name: np.zeros(shape, np.float32)}, _shrink())
+    for (_, pooled, _), shape in zip(_engine().sessions, ((1, 3, 32, 32), (1, 3, 48, 32))):
+        pooled.run(None, {pooled.get_inputs()[0].name: np.zeros(shape, np.float32)}, _shrink())
 
 
 def read_lines(img: Image.Image, dial: int = STRICT_DIAL) -> list[Line]:
@@ -129,6 +142,7 @@ def _shift(line: Line, dx: float, dy: float) -> Line:
 
 
 def _read_view(rgb: Image.Image, dial: int) -> list[tuple[float, Line]]:
+    _use_pool(rgb.width * rgb.height <= POOL_MAX_PIXELS)
     # Every box upright detection found, however badly it read, in the same call: the gate
     # needs the ones RapidOCR would drop. Keeping TEXT_SCORE and up gives its usual result.
     seen = _read(rgb, 0, 1.0, text_score=0.0)

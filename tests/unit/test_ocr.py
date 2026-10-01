@@ -80,3 +80,16 @@ def test_the_sessions_reuse_memory_and_hand_it_back_after_each_image(monkeypatch
 def test_physical_cores_is_a_core_count_on_every_supported_system():
     cores = physical_cores()
     assert 1 <= cores <= os.cpu_count()
+
+
+def test_large_views_are_read_without_the_memory_pool(monkeypatch):
+    """A 12 MP photo read through the pool peaked at 5.7 GB; past POOL_MAX_PIXELS it is not."""
+    engine = ocr._engine()
+    (det_holder, det_pooled, det_plain), _ = engine.sessions
+    active = []
+    monkeypatch.setattr(ocr, "_read", lambda view, turns, scale, **kw: active.append(det_holder.session) or [])
+    ocr._read_view(Image.new("RGB", (4000, 3000)), dial=3)  # 12 MP
+    large = len(active)
+    ocr._read_view(Image.new("RGB", (1920, 1080)), dial=3)
+    assert set(map(id, active[:large])) == {id(det_plain)}
+    assert set(map(id, active[large:])) == {id(det_pooled)}
