@@ -3,16 +3,18 @@
     uv run python tests/leak/run.py --corpus tests/corpus/out --outputs <dir>
 
 <dir> mirrors the corpus layout. Every file under <dir> whose path starts with an input's
-path minus its extension counts as that input's output: `docx/a.docx` -> `docx/a.md`.
+path minus its extension counts as that input's output: `docx/a.docx` -> `docx/a.docx.md`.
 Pointing --outputs at the corpus itself runs the "redactor that changes nothing" and must
 report 0% recall; that run proves the harness can see leaks.
 
 The verifier is deliberately independent of the redactor: it renders PDFs at 300 DPI,
-OCRs images at two scales and three rotations, decodes barcodes, dumps metadata, and also
-searches raw bytes. A leak only one of these paths can see still counts.
+OCRs pages and images at full size in three rotations (small images also at 2x), decodes
+barcodes, looks for faces with
+YuNet (needs the models from `redactit setup-models`), dumps metadata, and also searches
+raw bytes. A leak only one of these paths can see still counts.
 
 Exit code 1 if any seeded value (or an identifying part of one) survives, if an output
-still carries metadata or a PDF text layer, or if nothing was checked at all.
+still carries metadata, a face or a PDF text layer, or if nothing was checked at all.
 """
 
 from __future__ import annotations
@@ -35,8 +37,14 @@ TEXT_SUFFIXES = {".txt", ".md", ".json", ".csv"}
 NOT_NAME_PARTS = {"mr", "mrs", "ms", "miss", "dr", "jr", "sr", "md", "phd", "dds", "dvm", "ii", "iii", "iv"}
 # OCR confuses these pairs; folding both sides stops a misread digit from hiding a leak.
 OCR_FOLD = str.maketrans("oilsb", "01158")
+# RapidOCR first shrinks anything longer than this. Its default, 2000, blurred the small text
+# of a 4K screenshot or a 300 DPI page past reading, so a leak there went unseen.
+OCR_MAX_SIDE = 8192
+UPSCALE_MAX = 2048  # images up to this side are also read at 2x
 # PDF info keys that name the producing tool or a time, never the document's subject.
-HARMLESS_PDF_META = {"Producer", "CreationDate", "ModDate"}
+HARMLESS_PDF_META = {"Producer", "Creator", "CreationDate", "ModDate"}  # tool names and times; values in them are still matched
+FACE_MODEL = "yunet/face_detection_yunet_2023mar.onnx"
+FACE_MIN_SCORE = 0.6  # deliberately low: a face scored just under a redactor's cut-off is still a face
 
 
 def _canon(text: str) -> str:
@@ -193,7 +201,8 @@ def _pdf_text(data: bytes, problems: list[str]) -> dict[str, str]:
     layer, ocr = [], []
     for page in pdf:
         layer.append(page.get_textpage().get_text_range())
-        ocr.append(_ocr(page.render(scale=300 / 72).to_pil(), rotations=(0,)))
+        # Every rotation: text on a /Rotate'd page or drawn sideways reads as noise upright.
+        ocr.append(_ocr(page.render(scale=300 / 72).to_pil(), rotations=(0, 90, 270)))
     meta = {k: v for k, v in pdf.get_metadata_dict().items() if v and k not in HARMLESS_PDF_META}
     # Redacted PDFs are rebuilt from images, so any text layer or subject metadata means
     # the rebuild did not happen, even when no seeded value is in it.
@@ -204,9 +213,29 @@ def _pdf_text(data: bytes, problems: list[str]) -> dict[str, str]:
     return {"pdf_text_layer": "\n".join(layer), "pdf_ocr": "\n".join(ocr), "pdf_meta": " ".join(meta.values())}
 
 
+def _face_scores(img) -> list[float]:
+    """YuNet scores of the faces in `img` at or above FACE_MIN_SCORE.
+
+    A missing or mismatched model raises ModelError ("run `redactit setup-models`"): a leak
+    test that silently skipped faces would report success on an image with a face in it.
+    """
+    import cv2
+    import numpy as np
+    from redactit.models import path_for
+
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)  # OpenCV 5 warns on every create()
+    bgr = cv2.cvtColor(np.asarray(img.convert("RGB")), cv2.COLOR_RGB2BGR)
+    h, w = bgr.shape[:2]
+    detector = cv2.FaceDetectorYN.create(str(path_for(FACE_MODEL)), "", (w, h), FACE_MIN_SCORE, 0.3, 5000)
+    _, faces = detector.detect(bgr)
+    return [] if faces is None else [float(f[-1]) for f in faces]
+
+
 def _image_text(img, problems: list[str]) -> dict[str, str]:
     import zxingcpp
 
+    if _face_scores(img):
+        problems.append("face present")
     exif = img.getexif()
     meta = [str(v) for v in exif.values()] + [str(v) for v in exif.get_ifd(0x8825).values()]  # + GPS IFD
     meta += [str(v) for v in getattr(img, "text", {}).values()]  # PNG text chunks
@@ -216,10 +245,11 @@ def _image_text(img, problems: list[str]) -> dict[str, str]:
     # failed, even when no seeded value is in it (GPS coordinates are never seeded).
     if meta:
         problems.append("image metadata present")
-    # 2x upscale helps the detector with small or thin glyphs that 1x misses.
-    big = img.resize((img.width * 2, img.height * 2))
+    # 2x upscale helps the detector with small or thin glyphs that 1x misses. Large images
+    # are already read at full size, and doubling a 4K screenshot costs gigabytes.
+    big = img.resize((img.width * 2, img.height * 2)) if max(img.size) <= UPSCALE_MAX else None
     return {
-        "image_ocr": _ocr(img, rotations=(0, 90, 270)) + "\n" + _ocr(big, rotations=(0,)),
+        "image_ocr": _ocr(img, rotations=(0, 90, 270)) + "\n" + (_ocr(big, rotations=(0,)) if big else ""),
         "barcode": " ".join(r.text for r in zxingcpp.read_barcodes(img)),
         "image_meta": " ".join(meta),
     }
@@ -234,7 +264,7 @@ def _ocr(img, rotations) -> str:
     import numpy as np
     from rapidocr_onnxruntime import RapidOCR
 
-    _OCR = _OCR or RapidOCR()
+    _OCR = _OCR or RapidOCR(max_side_len=OCR_MAX_SIDE)
     lines = []
     for angle in rotations:
         result, _ = _OCR(np.asarray(img.convert("RGB").rotate(angle, expand=True)))
@@ -262,16 +292,20 @@ def run(corpus: Path, outputs: Path, spans_file: Path | None, formats: set[str] 
         outs = outputs_for(doc["file"], outputs)
         if not outs:
             missing.append(doc["file"])  # no output means nothing was checked: fail loud
-        compact, spaced = {}, {}
+        compact, spaced, found = {}, {}, set()  # found: every problem any output of this input showed
         for o in outs:
             sources, problems = extract(o)
+            found.update(problems)
             violations += [{"file": doc["file"], "output": o.name, "problem": p} for p in problems]
             for src, text in sources.items():
                 compact[f"{o.name}:{src}"], spaced[f"{o.name}:{src}"] = normalize(text), words(text)
         for s in doc["seeded"]:
             key = (doc["format"], s["entity_type"])
             per[key]["seeded"] += 1
-            hits = found_in(s["entity_type"], s["value"], compact, spaced)
+            if s["entity_type"] == "FACE":  # no text to match: the detector's verdict is the evidence
+                hits = ["face present"] if "face present" in found else []
+            else:
+                hits = found_in(s["entity_type"], s["value"], compact, spaced)
             if hits or not outs:
                 survivors.append({**s, "file": doc["file"], "found_in": hits or ["<no output>"]})
             else:

@@ -16,6 +16,7 @@ import pypdfium2 as pdfium
 import pytest
 
 import generate as gen
+from corpus_media import FACES
 
 SEED = 42
 PER_VARIANT = 1
@@ -73,8 +74,11 @@ def test_pdf_text_layer(corpus):
     for doc in manifest["documents"]:
         if doc["format"] != "pdf":
             continue
-        pdf = pdfium.PdfDocument(str(out / doc["file"]))
-        text = pdf[0].get_textpage().get_text_range()
+        page = pdfium.PdfDocument(str(out / doc["file"]))[0]
+        # Only text inside the shown area counts: a value drawn off the page (a turned page's
+        # MediaBox is landscape) is in the text layer but on no rendered pixel, so the leak
+        # test would pass it without ever checking it.
+        text = page.get_textpage().get_text_bounded(*page.get_cropbox())
 
         if doc["variant"] == "scanned":
             assert text == ""
@@ -116,3 +120,13 @@ def test_manifest_schema(corpus):
             assert e["id"] not in seen_ids
             seen_ids.add(e["id"])
     assert (out / "company_terms.txt").is_file()
+
+
+def test_every_photo_seeds_one_face_from_the_fixtures(corpus):
+    _, manifest = corpus
+    fixtures = {p.name for p in FACES.glob("*.jpg")}
+    images = [d for d in manifest["documents"] if d["format"] in ("png", "jpg") and d["variant"] == "plain"]
+    assert images and fixtures
+    for doc in images:
+        faces = [(e["location"], e["value"] in fixtures) for e in doc["seeded"] if e["entity_type"] == "FACE"]
+        assert faces == [("face", True)], doc["file"]

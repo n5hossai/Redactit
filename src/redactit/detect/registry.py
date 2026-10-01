@@ -21,6 +21,8 @@ from .patterns import (
     PHONE,
     UK_NINO,
     CaSinRecognizer,
+    CardDigitsRecognizer,
+    GluedIbanRecognizer,
     UsSsnRecognizer,
 )
 from .secrets import ApiKeyRecognizer
@@ -49,6 +51,8 @@ class Detector:
         recognizers = [
             # Luhn-checked, plus the Mastercard 2-series range Presidio's regex lacks.
             CreditCardRecognizer(patterns=CreditCardRecognizer.PATTERNS + [MASTERCARD_2_SERIES]),
+            CardDigitsRecognizer(),
+            GluedIbanRecognizer(),
             IbanRecognizer(supported_entity="IBAN"),  # mod-97 checked
             CaSinRecognizer(),
             UsSsnRecognizer(),
@@ -77,7 +81,7 @@ class Detector:
 # confident one. Presidio's own enhancer compares single lemmas (so "date of birth" never
 # matches) and adds only 0.35, which left a labelled birth date below every threshold.
 _CONTEXT = {
-    "DATE_OF_BIRTH": re.compile(r"\b(born|dob|d\.o\.b|birth\s*date|date\s+of\s+birth|birthday)\b", re.I),
+    "DATE_OF_BIRTH": re.compile(r"\b(born|dob|d\.o\.b|birth\s*date|date\s*of\s*birth|birthday)\b", re.I),  # OCR: "Dateof"
     "PASSPORT": re.compile(r"\bpassport\b", re.I),
     "PHONE": re.compile(r"\b(phone|tel|telephone|mobile|cell|call|fax|contacts?|reach|text|sms|number)\b", re.I),
     "US_SSN": re.compile(r"\b(ssn|ss\s*(?:no|#|number)|soc(?:ial)?\.?\s*sec(?:urity)?)\b", re.I),
@@ -141,6 +145,7 @@ def _to_span(result: RecognizerResult) -> Span:
         entity_type=result.entity_type,
         score=result.score,
         detector=meta.get(RecognizerResult.RECOGNIZER_NAME_KEY, ""),
-        validated=result.entity_type in _CHECKSUM_TYPES
-        or (result.entity_type in _STRUCTURAL_TYPES and result.score >= STRUCTURAL_SCORE),
+        # A passed checksum raises a match to 1.0, so the score separates confirmed matches
+        # from shapes that merely look like one (an OCR-misread IBAN scores 0.6).
+        validated=result.entity_type in _CHECKSUM_TYPES | _STRUCTURAL_TYPES and result.score >= STRUCTURAL_SCORE,
     )

@@ -124,7 +124,8 @@ def test_iban_bad_checksum_not_detected(det):
     broken = iban[:2] + "00" + iban[4:]
     assert not gen.iban_mod97_ok(broken)
     text = f"My IBAN is {broken}."
-    assert _spans_of(det, text, "IBAN") == []
+    # Still masked by shape (often an OCR misread, and IBAN is locked), but never "validated".
+    assert not [s for s in _spans_of(det, text, "IBAN") if s.validated]
 
 
 # --- CA_SIN (Luhn + reserved first digit) -----------------------------------
@@ -241,9 +242,15 @@ def test_company_term_exact_match(det):
     assert all(s.validated and s.score == 1.0 for s in spans)
 
 
-def test_company_term_is_not_a_longer_word(det):
-    text = "We discussed Project Bluefinches today."
-    assert _spans_of(det, text, "COMPANY_TERM") == []
+def test_a_short_company_term_is_not_part_of_a_longer_word(det):
+    short = Detector(company_terms=["Acme"])
+    assert _spans_of(short, "Acmeville council met today.", "COMPANY_TERM") == []
+
+
+def test_a_long_codename_is_found_glued_or_inflected(det):
+    """OCR glues words, and "Project Bluefinches" still names the codename."""
+    for text in ("We discussed Project Bluefinches today.", "Re:ProjectBluefinch status"):
+        assert _spans_of(det, text, "COMPANY_TERM"), text
 
 
 def test_company_term_longest_match_wins():
@@ -358,6 +365,7 @@ def test_street_addresses_the_model_misses(det, addr):
     ("Date of birth: 12.03.1985", "12.03.1985"),
     ("DOB: March 12th, 1985", "March 12th, 1985"),
     ("Born 1985/03/12 in Leeds.", "1985/03/12"),
+    ("Dateof birth:1951-04-07", "1951-04-07"),  # OCR dropped the spaces
 ])
 def test_birth_dates_in_more_formats(det, text, dob):
     spans = [s for s in _spans_of(det, text, "DATE_OF_BIRTH") if text[s.start:s.end] == dob]
@@ -445,3 +453,65 @@ def test_po_boxes_and_numbered_units(det, addr):
 def test_each_pattern_recognizer_has_its_own_name(det):
     spans = det.detect("Mail a@b.co or call 202-555-0147.")
     assert {s.detector.split(".")[0] for s in spans} >= {"email_pattern", "phone_pattern"}
+
+
+@pytest.mark.parametrize("text, card", [
+    ("Card on file: 3724180\r\n57889143", "3724180\r\n57889143"),
+    ("Card: 4111 1111\n1111 1111 thanks", "4111 1111\n1111 1111"),
+])
+def test_card_numbers_wrapped_across_a_line(det, text, card):
+    spans = [s for s in _spans_of(det, text, "CREDIT_CARD") if s.validated]
+    assert _covers(spans, text, card)
+
+
+def test_wrapped_digits_that_fail_luhn_are_not_cards(det):
+    assert not [s for s in _spans_of(det, "Order 1234567\n12345678", "CREDIT_CARD") if s.validated]
+
+
+# --- OCR often drops the space between a label and its value. ------------------------------
+
+@pytest.mark.parametrize("text, value, entity", [
+    ("IBANGB82WEST12345698765432PPCF581535", "GB82WEST12345698765432", "IBAN"),
+    ("IBANGB82WEST12345698765432PPCF581535", "CF581535", "PASSPORT"),
+    ("Card4111111111111111thanks", "4111111111111111", "CREDIT_CARD"),
+    ("SSN219-09-9999end", "219-09-9999", "US_SSN"),
+    ("Phone5551234567", "5551234567", "PHONE"),
+    ("NIAB123456C", "AB123456C", "UK_NINO"),
+    # 35 characters: OCR read "rn" in this 36-character token as "m"
+    ("TOKEN=ghp_vQRA5ndPdmVuCNY3nO1aKoflpFqWEH3lOHx", "ghp_vQRA5ndPdmVuCNY3nO1aKoflpFqWEH3lOHx", "API_KEY"),
+])
+def test_values_glued_to_a_label(det, text, value, entity):
+    assert _covers(_spans_of(det, text, entity), text, value)
+
+
+def test_a_glued_iban_is_only_validated_when_it_passes_mod97(det):
+    spans = [s for s in _spans_of(det, "REFGB82WEST12345698765433", "IBAN") if s.detector == "glued_iban"]
+    assert spans and not any(s.validated for s in spans)
+
+
+@pytest.mark.parametrize("text, addr", [
+    ("Address: 2 Josh Plains, \r\nVanessafort, S6 5WJ", "2 Josh Plains, \r\nVanessafort, S6 5WJ"),
+    ("1678WallerInlet,EastMatthew,SKR3P1B2", "1678WallerInlet,EastMatthew,SKR3P1B2"),
+    ("Address: 2 Josh Plains, Va\r\nnessafort, S6 5WJ", "2 Josh Plains, Va\r\nnessafort, S6 5WJ"),  # mid-word wrap
+    ("Address: PSC 6319, Box 47\r\n75, APO AP 11657", "PSC 6319, Box 47\r\n75, APO AP 11657"),
+    ("Address: USNS Green,\nFPOAE26947", "USNS Green,\nFPOAE26947"),
+    ("Address:PSC0489,Box6499,APOAE87326", "PSC0489,Box6499,APOAE87326"),
+    ("Address: PSC 6319,Box 47\n75,APO AP 11657", "PSC 6319,Box 47\n75,APO AP 11657"),
+    # "Crest" is no known street type; the state (read "Vl" for "VI") and ZIP carry the line.
+    ("Address: 1505 Combs Crest Apt.044, Calvinfurt, Vl 77725", "1505 Combs Crest Apt.044, Calvinfurt, Vl 77725"),
+])
+def test_addresses_wrapped_or_glued_by_ocr(det, text, addr):
+    assert _covers(_spans_of(det, text, "ADDRESS"), text, addr)
+
+
+def test_a_us_zip_needs_a_town_before_it(det):
+    assert not _spans_of(det, "Form VA 12345 is due. Order 55, total 12345.", "ADDRESS")
+
+
+def test_an_iban_in_printed_groups_is_covered_whole(det):
+    text = "IBANGB82 WEST 1234 5698 7654 32 thanks"
+    assert _covers(_spans_of(det, text, "IBAN"), text, "GB82 WEST 1234 5698 7654 32")
+
+
+def test_lower_case_passport_letters_must_start_a_word(det):
+    assert not _spans_of(det, "Deadline 20240315 for the report", "PASSPORT")

@@ -18,7 +18,9 @@ MAX_WIDTH = 12  # gliner_config.json max_width: the longest span, in words, the 
 # to 0.51 as its window grew to 4,000 tokens; short windows keep both in bounds.
 WINDOW_TOKENS, OVERLAP_TOKENS = 320, 64
 LONG_WORD_TOKENS = 40  # one "word" this long (base64, a URL) cannot be a name; skip it
-WORD = re.compile(r"\w+(?:[-_]\w+)*|\S")  # GLiNER's own word splitter
+# GLiNER's own word splitter, plus a split where a lower-case letter meets a capital: OCR
+# drops spaces ("Chat withJenniferRice"), and a glued name is one unknown word to the model.
+WORD = re.compile(r"[A-Z]?[a-z]+(?=[A-Z])|\w+(?:[-_]\w+)*|\S")
 PROMPT = [t for label in LABELS for t in ("<<ENT>>", label)] + ["<<SEP>>"]
 
 

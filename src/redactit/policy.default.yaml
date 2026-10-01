@@ -30,6 +30,8 @@ entities:
   UK_NINO:       {action: mask, locked: true}
   PASSPORT:      {action: mask, locked: true}
   API_KEY:       {action: strike, locked: true}
+  FACE:          {action: box, locked: true}       # images and PDF pages only
+  BARCODE:       {action: box, locked: true}       # QR and barcodes can encode anything
 
 custom_terms:
   files: []          # one term per line: client names, project codenames

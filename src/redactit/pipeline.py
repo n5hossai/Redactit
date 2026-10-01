@@ -9,7 +9,7 @@ from redactit.audit import AuditLog
 from redactit.detect.ner import GlinerNer
 from redactit.detect.registry import Detector
 from redactit.policy import Policy
-from redactit.pseudonym import Pseudonymizer, apply
+from redactit.pseudonym import Pseudonymizer, replacements, splice
 from redactit.types import Decision, Span
 from redactit.vault import Vault
 
@@ -17,7 +17,8 @@ from redactit.vault import Vault
 @dataclass(frozen=True)
 class Result:
     text: str
-    decisions: list[Decision]  # offsets index into the original input text
+    decisions: list[Decision]  # sorted by start; offsets index into the original input text
+    replacements: list[str]  # what each decision became, e.g. "[PERSON_1]" or "****"
 
 
 class Engine:
@@ -27,13 +28,15 @@ class Engine:
         safety.block_network()  # here, not only in the CLI, so every interface runs behind it
         self.policy, self.vault, self.audit = policy, vault, audit
         self.detector = Detector(company_terms=policy.company_terms())
-        self.ner = GlinerNer(models.path_for("gliner/model.onnx"), models.path_for("gliner/tokenizer.json"))
+        # Every pinned file is hash-checked here, once: hashing the NER model takes about a second.
+        paths = {name: models.path_for(name) for name in models.LOCK}
+        self.ner = GlinerNer(paths["gliner/model.onnx"], paths["gliner/tokenizer.json"])
         purged = vault.purge(policy.vault.retention_days)
         if audit:
             audit.write("engine_start", version=__version__)
             audit.write("policy_loaded", dial=policy.effective_dial(), admin_floor=policy.dial.admin_floor,
                         entity_count=len(policy.entities), locked_count=sum(e.locked for e in policy.entities.values()))
-            for name, pin in models.LOCK.items():  # path_for above already verified each hash
+            for name, pin in models.LOCK.items():  # all verified above, so each event is true
                 audit.write("model_verified", model=name.replace("/", ".").lower(),
                             revision=pin["url"].split("/resolve/")[1].split("/")[0], sha256=pin["sha256"])
             audit.write("vault_purge", purged_count=purged, retention_days=policy.vault.retention_days)
@@ -44,7 +47,9 @@ class Engine:
         clean, where = _canonical(text)
         spans = _join_address_fragments(clean, self.detector.detect(clean) + self.ner.detect(clean))
         decisions = [_to_source(d, where) for d in self.policy.decide(clean, spans, site)]
-        result = Result(apply(text, decisions, Pseudonymizer(self.vault, scope)), decisions)
+        decisions.sort(key=lambda d: d.span.start)  # the order replacements() numbers labels in
+        subs = replacements(text, decisions, Pseudonymizer(self.vault, scope))
+        result = Result(splice(text, decisions, subs), decisions, subs)
         if self.audit:
             self.audit.write(
                 "redaction",

@@ -10,7 +10,8 @@ import platformdirs
 
 from redactit import __version__
 
-TEXT_SUFFIXES = {".txt", ".md"}
+SUFFIXES = {".txt": "text", ".md": "text", ".docx": "docx", ".pdf": "pdf",
+            ".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image"}
 
 
 def _paths() -> dict[str, Path]:
@@ -29,6 +30,9 @@ def _redact(args: argparse.Namespace) -> int:
 
     safety.block_network()  # before any detector or model code is imported and run
     from redactit.audit import AuditLog
+    from redactit.formats.docx import docx_to_markdown
+    from redactit.formats.image import redact_image
+    from redactit.formats.pdf import redact_pdf
     from redactit.managed import assert_admin_owned, managed_policy_path
     from redactit.pipeline import Engine
     from redactit.policy import load_policy
@@ -44,13 +48,32 @@ def _redact(args: argparse.Namespace) -> int:
     engine = Engine(load_policy(user_policy, managed), Vault.open(paths["vault"]), AuditLog(paths["audit"]))
     scope = args.scope or uuid.uuid4().hex  # a fresh scope per call unless the caller links runs
     args.out.mkdir(parents=True, exist_ok=True)
+    seen = set()
     for i, src in enumerate(args.paths, 1):
-        if src.suffix.lower() not in TEXT_SUFFIXES:
-            print(f"skipped {i}/{len(args.paths)}: {src.suffix or 'no extension'} is not supported yet", file=sys.stderr)
+        kind = SUFFIXES.get(src.suffix.lower())
+        if kind is None:
+            print(f"skipped {i}/{len(args.paths)}: {src.suffix or 'no extension'} is not supported", file=sys.stderr)
             continue
-        result = engine.redact(src.read_text(encoding="utf-8"), scope, file_type=src.suffix[1:].lower(), site=args.site)
-        (args.out / src.name).write_text(result.text, encoding="utf-8")
-        print(f"redacted {i}/{len(args.paths)}: {len(result.decisions)} items")
+        if src.name.lower() in seen:  # a/notes.md and b/notes.md would both write out/notes.md
+            print(f"skipped {i}/{len(args.paths)}: an earlier input has the same name", file=sys.stderr)
+            continue
+        seen.add(src.name.lower())
+        # A changed format is appended to the full name ("notes.docx.md", "scan.pdf.md",
+        # "photo.webp.png"), so notes.docx can never overwrite notes.md from the same folder.
+        dst = args.out / src.name
+        if kind == "pdf":  # rebuilt from pixels, plus the redacted page text as Markdown
+            pdf, markdown = redact_pdf(src.read_bytes(), engine, scope)
+            dst.write_bytes(pdf)
+            dst.with_name(dst.name + ".md").write_text(markdown, encoding="utf-8")
+        elif kind == "image":  # JPEG stays JPEG; every other format becomes PNG
+            image, suffix, _ = redact_image(src.read_bytes(), engine, scope)
+            same = src.suffix.lower() in ((".jpg", ".jpeg") if suffix == ".jpg" else (suffix,))
+            (dst if same else dst.with_name(dst.name + suffix)).write_bytes(image)
+        else:  # Word documents come out as Markdown; txt and md keep their format
+            text = docx_to_markdown(src.read_bytes()) if kind == "docx" else src.read_text(encoding="utf-8")
+            result = engine.redact(text, scope, file_type=src.suffix[1:].lower(), site=args.site)
+            (dst.with_name(dst.name + ".md") if kind == "docx" else dst).write_text(result.text, encoding="utf-8")
+        print(f"redacted {i}/{len(args.paths)}")
     return 0
 
 
@@ -67,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="store_true", help="print the version and exit")
     sub = parser.add_subparsers(dest="command")
 
-    redact = sub.add_parser("redact", help="redact text or Markdown files")
+    redact = sub.add_parser("redact", help="redact text, Markdown, Word, PDF and image files")
     redact.add_argument("paths", nargs="+", type=Path)
     redact.add_argument("--out", type=Path, required=True, help="output folder")
     redact.add_argument("--policy", type=Path, help="policy file (default: user policy if present)")
