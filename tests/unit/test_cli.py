@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 from redactit import cli, models
-from redactit.cli import output_name, output_suffixes
+from redactit.cli import output_name, output_suffixes, redact_file
+from redactit.formats import image, pdf
 
 
 @pytest.fixture
@@ -69,6 +70,23 @@ def test_an_input_of_another_name_is_not_overwritten_either(tmp_path, redacted):
     inputs = write(tmp_path / "in", {"notes.docx": b"Word", "notes.docx.md": b"Markdown"})
     assert cli.main(["redact", str(inputs[0]), str(inputs[1]), "--out", str(tmp_path / "in")]) == 1
     assert inputs[1].read_bytes() == b"Markdown"
+
+
+def test_the_site_flag_reaches_each_files_redaction(tmp_path, redacted):
+    inputs = write(tmp_path / "in", {"notes.txt": b"text", "scan.pdf": b"%PDF"})
+    assert cli.main(["redact", *map(str, inputs), "--out", str(tmp_path / "out"), "--site", "chatgpt.com"]) == 0
+    assert redacted.runs == [("notes.txt", "chatgpt.com"), ("scan.pdf", "chatgpt.com")]
+
+
+def test_redact_file_passes_the_site_to_every_format(monkeypatch):
+    seen = []
+    engine = SimpleNamespace(redact=lambda text, scope, **kw: seen.append(("text", kw["site"])) or SimpleNamespace(text=text))
+    monkeypatch.setattr(pdf, "redact_pdf", lambda data, eng, scope, **kw: seen.append(("pdf", kw["site"])) or (b"%PDF", ""))
+    monkeypatch.setattr(image, "redact_image",
+                        lambda data, eng, scope, **kw: seen.append(("image", kw["site"])) or (b"PNG", ".png", ""))
+    for name in ("notes.txt", "notes.md", "scan.pdf", "photo.png"):
+        redact_file(name, b"synthetic", engine, "scope", site="chatgpt.com")
+    assert seen == [("text", "chatgpt.com"), ("text", "chatgpt.com"), ("pdf", "chatgpt.com"), ("image", "chatgpt.com")]
 
 
 def test_the_inputs_folder_can_hold_outputs_that_replace_nothing(tmp_path, redacted):

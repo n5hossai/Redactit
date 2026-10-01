@@ -308,6 +308,24 @@ def test_ocr_that_cannot_load_still_serves_text_and_refuses_pdfs_and_images(wire
     assert w.next("p1")["state"] == "ready-text"  # never ready-all
 
 
+def test_each_requests_site_reaches_its_redaction(wire, monkeypatch):
+    from redactit.formats import image, pdf
+
+    sites = []
+    monkeypatch.setattr(pdf, "redact_pdf",
+                        lambda data, engine, scope, *, site, **kw: sites.append(("pdf", site)) or (b"%PDF", "## Page 1\n"))
+    monkeypatch.setattr(image, "redact_image",
+                        lambda data, engine, scope, *, site, **kw: sites.append(("image", site)) or (b"PNG", ".png", ""))
+    engine = StubEngine()
+    w = wire(lambda: engine)
+    requests = [("text", "claude.ai"), ("txt", "chatgpt.com"), ("pdf", "gemini.google.com"), ("image", "claude.ai")]
+    for rid, (kind, site) in enumerate(requests):
+        w.request(f"s{rid}", kind, PAYLOADS[kind], site=site)
+        assert w.outcome(f"s{rid}")["type"] == "result"
+    assert engine.sites == ["claude.ai", "chatgpt.com"]
+    assert sites == [("pdf", "gemini.google.com"), ("image", "claude.ai")]
+
+
 def test_a_detection_timeout_is_its_own_error_and_returns_nothing(wire):
     w = wire(lambda: StubEngine(redact_raises=PatternTimeout("a detection pattern timed out; nothing was redacted")))
     w.request("t1", "text", PAYLOADS["text"])
