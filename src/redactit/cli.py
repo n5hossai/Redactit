@@ -110,10 +110,9 @@ def _decode(data: bytes) -> str:
 
 def _redact(args: argparse.Namespace) -> int:
     from redactit import models, safety
-
     from redactit.types import RedactitError
 
-    inputs = [src for src in args.paths if src.suffix.lower() in SUFFIXES]
+    inputs =[src for src in args.paths if src.suffix.lower() in SUFFIXES]
     # Before anything loads or is written: notes.txt or scan.pdf redacted into its own
     # folder would replace the original.
     if any(_same_file(args.out / name, src) for name in _expected_outputs(inputs) for src in inputs):
