@@ -1,0 +1,61 @@
+{
+ "note": "Phase 3 against Phase 4 on the same machine and inputs. Images compare same-size repeats, as Phase 3 measured; new-size times are in timing.json.",
+ "title": "Phase 3 against Phase 4",
+ "subtitle": "Ring: Phase 3. Dot: Phase 4. Same machine, same inputs, log scale",
+ "impact": [
+  {
+   "label": "Cold start to a loaded engine",
+   "before_s": 6.1,
+   "after_s": 3.21,
+   "basis": "measured"
+  },
+  {
+   "label": "Paste, 2 KB",
+   "before_s": 0.62,
+   "after_s": 0.51,
+   "basis": "measured"
+  },
+  {
+   "label": "Paste, 200 KB",
+   "before_s": 72.09,
+   "after_s": 52.51,
+   "basis": "measured"
+  },
+  {
+   "label": "Word, 10 pages",
+   "before_s": 9.58,
+   "after_s": 7.86,
+   "basis": "measured"
+  },
+  {
+   "label": "PDF, 1 digital page",
+   "before_s": 11.81,
+   "after_s": 7.02,
+   "basis": "measured"
+  },
+  {
+   "label": "PDF, 10 digital pages",
+   "before_s": 116.34,
+   "after_s": 69.76,
+   "basis": "measured"
+  },
+  {
+   "label": "Screenshot, 1080p",
+   "before_s": 9.53,
+   "after_s": 6.53,
+   "basis": "measured"
+  },
+  {
+   "label": "Screenshot, 4K",
+   "before_s": 37.94,
+   "after_s": 25.07,
+   "basis": "measured"
+  },
+  {
+   "label": "Phone photo, 12 MP",
+   "before_s": 15.36,
+   "after_s": 12.14,
+   "basis": "measured"
+  }
+ ]
+}

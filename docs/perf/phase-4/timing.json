@@ -1,0 +1,626 @@
+{
+ "date": "2026-10-01",
+ "machine": {
+  "cpu": "AMD Ryzen 7 7840HS w/ Radeon 780M Graphics",
+  "logical_cpus": 16,
+  "os": "Windows-11-10.0.26200-SP0",
+  "python": "3.12.10"
+ },
+ "cold_start": {
+  "runs_s": [
+   3.239795299945399,
+   3.178344100015238,
+   3.2080670001450926
+  ],
+  "median_s": 3.2080670001450926,
+  "stages_s": {
+   "Imports": 1.6224904998671263,
+   "Model hash check": 0.00011570006608963013,
+   "Python start": 0.22737420024350286,
+   "Presidio and spaCy load": 0.26400680001825094,
+   "Vault, policy and audit": 0.03043809998780489,
+   "Name model load": 1.0547312998678535
+  },
+  "memory_after_load_mb": 927.81640625
+ },
+ "scenarios": [
+  {
+   "id": "text_200b",
+   "kind": "text",
+   "input": {
+    "bytes": 200
+   },
+   "repeats": 10,
+   "warmup_s": 0.057329000206664205,
+   "runs_s": [
+    0.049849600065499544,
+    0.04545550001785159,
+    0.046120200073346496,
+    0.044971799943596125,
+    0.04485329985618591,
+    0.04587660008110106,
+    0.049223499838262796,
+    0.04496959992684424,
+    0.04578789998777211,
+    0.044252799823880196
+   ],
+   "median_s": 0.04562170000281185,
+   "min_s": 0.044252799823880196,
+   "max_s": 0.049849600065499544,
+   "stages_s": {
+    "Patterns and checksums": 0.00531204987782985,
+    "Name and address model": 0.03952789993491024,
+    "Other": 0.0007817501900717616
+   },
+   "memory_after_load_mb": 940.84765625,
+   "memory_now_mb": 971.44140625,
+   "memory_peak_mb": 1207.92578125,
+   "output_bytes": 185,
+   "label": "Paste, 200 B",
+   "group": "text"
+  },
+  {
+   "id": "text_2kb",
+   "kind": "text",
+   "input": {
+    "bytes": 2000
+   },
+   "repeats": 10,
+   "warmup_s": 0.5896572999190539,
+   "runs_s": [
+    0.508576099993661,
+    0.5123783000744879,
+    0.5170511999167502,
+    0.5093143999110907,
+    0.5076792000327259,
+    0.5083044001366943,
+    0.5677440001163632,
+    0.5084220999851823,
+    0.5100716999731958,
+    0.5077223000116646
+   ],
+   "median_s": 0.5089452499523759,
+   "min_s": 0.5076792000327259,
+   "max_s": 0.5677440001163632,
+   "stages_s": {
+    "Patterns and checksums": 0.034979249932803214,
+    "Name and address model": 0.4718713000183925,
+    "Other": 0.002094700001180172
+   },
+   "memory_after_load_mb": 940.15625,
+   "memory_now_mb": 1072.81640625,
+   "memory_peak_mb": 1207.77734375,
+   "output_bytes": 1856,
+   "label": "Paste, 2 KB",
+   "group": "text"
+  },
+  {
+   "id": "text_20kb",
+   "kind": "text",
+   "input": {
+    "bytes": 20000
+   },
+   "repeats": 5,
+   "warmup_s": 7.357283799909055,
+   "runs_s": [
+    6.556285500060767,
+    6.530637500109151,
+    6.500681499950588,
+    6.529741399921477,
+    6.714344199979678
+   ],
+   "median_s": 6.530637500109151,
+   "min_s": 6.500681499950588,
+   "max_s": 6.714344199979678,
+   "stages_s": {
+    "Patterns and checksums": 0.3027291998732835,
+    "Name and address model": 6.212072300026193,
+    "Other": 0.01583600020967424
+   },
+   "memory_after_load_mb": 940.25,
+   "memory_now_mb": 1112.9609375,
+   "memory_peak_mb": 1207.7890625,
+   "output_bytes": 18583,
+   "label": "Paste, 20 KB",
+   "group": "text"
+  },
+  {
+   "id": "text_200kb",
+   "kind": "text",
+   "input": {
+    "bytes": 200000
+   },
+   "repeats": 3,
+   "warmup_s": 58.702521400060505,
+   "runs_s": [
+    52.44729579985142,
+    52.58213260001503,
+    52.51136569981463
+   ],
+   "median_s": 52.51136569981463,
+   "min_s": 52.44729579985142,
+   "max_s": 52.58213260001503,
+   "stages_s": {
+    "Patterns and checksums": 2.912900999886915,
+    "Name and address model": 49.42803670000285,
+    "Other": 0.17042799992486835
+   },
+   "memory_after_load_mb": 941.0859375,
+   "memory_now_mb": 1236.89453125,
+   "memory_peak_mb": 1770.59375,
+   "output_bytes": 187232,
+   "label": "Paste, 200 KB (a log)",
+   "group": "text"
+  },
+  {
+   "id": "docx_1p",
+   "kind": "docx",
+   "input": {
+    "bytes": 1968,
+    "pages": 1
+   },
+   "repeats": 5,
+   "warmup_s": 0.8725670999847353,
+   "runs_s": [
+    0.7675834998954087,
+    0.7629160999786109,
+    0.7728469001594931,
+    0.7957482999190688,
+    0.7603265000507236
+   ],
+   "median_s": 0.7675834998954087,
+   "min_s": 0.7603265000507236,
+   "max_s": 0.7957482999190688,
+   "stages_s": {
+    "Word to Markdown": 0.0003785998560488224,
+    "Patterns and checksums": 0.04797559999860823,
+    "Name and address model": 0.7199006001465023,
+    "Other": 0.0
+   },
+   "memory_after_load_mb": 940.12890625,
+   "memory_now_mb": 1106.72265625,
+   "memory_peak_mb": 1207.46875,
+   "output_bytes": 2786,
+   "label": "Word, 1 page",
+   "group": "docx"
+  },
+  {
+   "id": "docx_10p",
+   "kind": "docx",
+   "input": {
+    "bytes": 13059,
+    "pages": 10
+   },
+   "repeats": 3,
+   "warmup_s": 8.763933300040662,
+   "runs_s": [
+    7.825497000012547,
+    7.860002999892458,
+    7.900060800136998
+   ],
+   "median_s": 7.860002999892458,
+   "min_s": 7.825497000012547,
+   "max_s": 7.900060800136998,
+   "stages_s": {
+    "Word to Markdown": 0.0009963999036699533,
+    "Patterns and checksums": 0.4176434001419693,
+    "Name and address model": 7.404445899883285,
+    "Other": 0.03691729996353388
+   },
+   "memory_after_load_mb": 940.09375,
+   "memory_now_mb": 1113.78125,
+   "memory_peak_mb": 1207.6484375,
+   "output_bytes": 27930,
+   "label": "Word, 10 pages",
+   "group": "docx"
+  },
+  {
+   "id": "docx_50p",
+   "kind": "docx",
+   "input": {
+    "bytes": 60130,
+    "pages": 50
+   },
+   "repeats": 2,
+   "warmup_s": 43.64791629998945,
+   "runs_s": [
+    39.167835999978706,
+    39.219093000050634
+   ],
+   "median_s": 39.19346450001467,
+   "min_s": 39.167835999978706,
+   "max_s": 39.219093000050634,
+   "stages_s": {
+    "Word to Markdown": 0.004067700006999075,
+    "Patterns and checksums": 2.1276314998976886,
+    "Name and address model": 36.89579204993788,
+    "Other": 0.16597325017210096
+   },
+   "memory_after_load_mb": 940.01171875,
+   "memory_now_mb": 1145.46875,
+   "memory_peak_mb": 1545.38671875,
+   "output_bytes": 140373,
+   "label": "Word, 50 pages",
+   "group": "docx"
+  },
+  {
+   "id": "pdf_digital_1p",
+   "kind": "pdf",
+   "input": {
+    "bytes": 3591,
+    "pages": 1
+   },
+   "repeats": 3,
+   "warmup_s": 8.028331199893728,
+   "runs_s": [
+    7.038093899842352,
+    7.007651099935174,
+    7.019194199936464
+   ],
+   "median_s": 7.019194199936464,
+   "min_s": 7.007651099935174,
+   "max_s": 7.038093899842352,
+   "stages_s": {
+    "Render page": 0.005805899854749441,
+    "Patterns and checksums": 0.11250860011205077,
+    "Name and address model": 2.024530899943784,
+    "OCR, upright pass": 4.3523295999038965,
+    "Faces": 0.14329629996791482,
+    "Barcodes": 0.06949449982494116,
+    "Paint boxes": 0.008992600021883845,
+    "Write page": 0.006639599800109863,
+    "Other": 0.2955962005071342
+   },
+   "memory_after_load_mb": 940.19921875,
+   "memory_now_mb": 1193.00390625,
+   "memory_peak_mb": 2070.3359375,
+   "output_bytes": 544638,
+   "label": "PDF, 1 digital page",
+   "group": "pdf"
+  },
+  {
+   "id": "pdf_scanned_1p",
+   "kind": "pdf",
+   "input": {
+    "bytes": 382937,
+    "pages": 1
+   },
+   "repeats": 3,
+   "warmup_s": 6.346560999983922,
+   "runs_s": [
+    5.648750599939376,
+    5.6029086001217365,
+    5.617256300058216
+   ],
+   "median_s": 5.617256300058216,
+   "min_s": 5.6029086001217365,
+   "max_s": 5.648750599939376,
+   "stages_s": {
+    "Render page": 0.031464200001209974,
+    "OCR, upright pass": 4.539855999872088,
+    "Patterns and checksums": 0.04892969992943108,
+    "Name and address model": 0.6959842999931425,
+    "Faces": 0.1442337001208216,
+    "Barcodes": 0.07144269999116659,
+    "Paint boxes": 0.010302099864929914,
+    "Write page": 0.00670440006069839,
+    "Other": 0.06833920022472739
+   },
+   "memory_after_load_mb": 941.37890625,
+   "memory_now_mb": 1204.984375,
+   "memory_peak_mb": 2091.16796875,
+   "output_bytes": 585544,
+   "label": "PDF, 1 scanned page",
+   "group": "pdf"
+  },
+  {
+   "id": "pdf_digital_4p",
+   "kind": "pdf",
+   "input": {
+    "bytes": 11563,
+    "pages": 4
+   },
+   "repeats": 2,
+   "warmup_s": 29.15028170007281,
+   "runs_s": [
+    27.87585399998352,
+    28.08981109992601
+   ],
+   "median_s": 27.982832549954765,
+   "min_s": 27.87585399998352,
+   "max_s": 28.08981109992601,
+   "stages_s": {
+    "Render page": 0.02364074985962361,
+    "Patterns and checksums": 0.436401299899444,
+    "Name and address model": 7.999646199750714,
+    "OCR, upright pass": 17.414597449824214,
+    "Faces": 0.5952475499361753,
+    "Barcodes": 0.28128775022923946,
+    "Paint boxes": 0.037039299961179495,
+    "Write page": 0.0270248499000445,
+    "Other": 1.1679474005941302
+   },
+   "memory_after_load_mb": 940.9296875,
+   "memory_now_mb": 1210.39453125,
+   "memory_peak_mb": 2169.18359375,
+   "output_bytes": 2198915,
+   "label": "PDF, 4 digital pages",
+   "group": "pdf"
+  },
+  {
+   "id": "pdf_digital_10p",
+   "kind": "pdf",
+   "input": {
+    "bytes": 27629,
+    "pages": 10
+   },
+   "repeats": 1,
+   "warmup_s": 71.83190999994986,
+   "runs_s": [
+    69.7612842998933
+   ],
+   "median_s": 69.7612842998933,
+   "min_s": 69.7612842998933,
+   "max_s": 69.7612842998933,
+   "stages_s": {
+    "Render page": 0.057747200364246964,
+    "Patterns and checksums": 1.097209199797362,
+    "Name and address model": 20.020745600340888,
+    "OCR, upright pass": 43.423302199691534,
+    "Faces": 1.4145908001810312,
+    "Barcodes": 0.6916514004115015,
+    "Paint boxes": 0.09494420001283288,
+    "Write page": 0.06759419967420399,
+    "Other": 2.893499499419704
+   },
+   "memory_after_load_mb": 940.76171875,
+   "memory_now_mb": 1221.08203125,
+   "memory_peak_mb": 2173.98828125,
+   "output_bytes": 5499701,
+   "label": "PDF, 10 digital pages",
+   "group": "pdf"
+  },
+  {
+   "id": "img_720p",
+   "kind": "image",
+   "input": {
+    "bytes": 113624,
+    "pixels": 921600
+   },
+   "repeats": 3,
+   "warmup_s": 4.257963499985635,
+   "runs_s": [
+    3.5912212999537587,
+    3.4686239999718964,
+    3.629386099986732
+   ],
+   "median_s": 3.5912212999537587,
+   "min_s": 3.4686239999718964,
+   "max_s": 3.629386099986732,
+   "stages_s": {
+    "OCR, upright pass": 2.462119300151244,
+    "OCR, 2x pass for small text": 0.4184876000508666,
+    "Patterns and checksums": 0.03762670001015067,
+    "Name and address model": 0.5058585000224411,
+    "Faces": 0.056131600169464946,
+    "Barcodes": 0.02279180008918047,
+    "Paint boxes": 0.005488299997523427,
+    "Other": 0.08271749946288764
+   },
+   "memory_after_load_mb": 942.4375,
+   "memory_now_mb": 1173.65234375,
+   "memory_peak_mb": 1996.765625,
+   "output_bytes": 92699,
+   "new_size_grow_px": 32,
+   "same_size_runs_s": [
+    3.5075408997945487,
+    3.5231296999845654,
+    3.802240899996832
+   ],
+   "same_size_median_s": 3.5231296999845654,
+   "label": "Screenshot, 1280 x 720",
+   "group": "image"
+  },
+  {
+   "id": "img_1080p",
+   "kind": "image",
+   "input": {
+    "bytes": 207290,
+    "pixels": 2073600
+   },
+   "repeats": 3,
+   "warmup_s": 7.313567100092769,
+   "runs_s": [
+    6.509782399982214,
+    6.549170699901879,
+    6.5561671000905335
+   ],
+   "median_s": 6.549170699901879,
+   "min_s": 6.509782399982214,
+   "max_s": 6.5561671000905335,
+   "stages_s": {
+    "OCR, upright pass": 5.229793899925426,
+    "Patterns and checksums": 0.0637149999383837,
+    "Name and address model": 1.0104988000821322,
+    "Faces": 0.09129919996485114,
+    "Barcodes": 0.04060900001786649,
+    "Paint boxes": 0.009289200184866786,
+    "Other": 0.10396559978835285
+   },
+   "memory_after_load_mb": 942.4765625,
+   "memory_now_mb": 1182.546875,
+   "memory_peak_mb": 2052.14453125,
+   "output_bytes": 182258,
+   "new_size_grow_px": 32,
+   "same_size_runs_s": [
+    6.525650399969891,
+    6.498512899968773,
+    6.539271500194445
+   ],
+   "same_size_median_s": 6.525650399969891,
+   "label": "Screenshot, 1920 x 1080",
+   "group": "image"
+  },
+  {
+   "id": "img_1440p",
+   "kind": "image",
+   "input": {
+    "bytes": 354080,
+    "pixels": 3686400
+   },
+   "repeats": 3,
+   "warmup_s": 13.424629400018603,
+   "runs_s": [
+    12.456676899921149,
+    12.587402099976316,
+    12.524576999945566
+   ],
+   "median_s": 12.524576999945566,
+   "min_s": 12.456676899921149,
+   "max_s": 12.587402099976316,
+   "stages_s": {
+    "OCR, upright pass": 10.076184200122952,
+    "Patterns and checksums": 0.1142444999422878,
+    "Name and address model": 1.95430690003559,
+    "Faces": 0.14914119988679886,
+    "Barcodes": 0.07134540006518364,
+    "Paint boxes": 0.016592999920248985,
+    "Other": 0.14276179997250438
+   },
+   "memory_after_load_mb": 942.15234375,
+   "memory_now_mb": 1193.9921875,
+   "memory_peak_mb": 2449.7109375,
+   "output_bytes": 319218,
+   "new_size_grow_px": 32,
+   "same_size_runs_s": [
+    12.461617199936882,
+    12.451412599999458,
+    12.43052599998191
+   ],
+   "same_size_median_s": 12.451412599999458,
+   "label": "Screenshot, 2560 x 1440",
+   "group": "image"
+  },
+  {
+   "id": "img_4k",
+   "kind": "image",
+   "input": {
+    "bytes": 672916,
+    "pixels": 8294400
+   },
+   "repeats": 3,
+   "warmup_s": 26.03992130002007,
+   "runs_s": [
+    24.68662829999812,
+    24.781502699945122,
+    24.685576200019568
+   ],
+   "median_s": 24.68662829999812,
+   "min_s": 24.685576200019568,
+   "max_s": 24.781502699945122,
+   "stages_s": {
+    "OCR, upright pass": 19.801824999973178,
+    "Patterns and checksums": 0.23022340005263686,
+    "Name and address model": 3.875594599870965,
+    "Faces": 0.2932372000068426,
+    "Barcodes": 0.15055379993282259,
+    "Paint boxes": 0.033210399793460965,
+    "Other": 0.30198390036821365
+   },
+   "memory_after_load_mb": 942.890625,
+   "memory_now_mb": 1195.7734375,
+   "memory_peak_mb": 3515.61328125,
+   "output_bytes": 637137,
+   "new_size_grow_px": 32,
+   "same_size_runs_s": [
+    25.11424220004119,
+    25.065890499856323,
+    24.70164299989119
+   ],
+   "same_size_median_s": 25.065890499856323,
+   "label": "Screenshot, 3840 x 2160",
+   "group": "image"
+  },
+  {
+   "id": "photo_1mp",
+   "kind": "image",
+   "input": {
+    "bytes": 174418,
+    "pixels": 900000
+   },
+   "repeats": 3,
+   "warmup_s": 2.3917632999364287,
+   "runs_s": [
+    1.801329500041902,
+    1.839094600174576,
+    1.945453300140798
+   ],
+   "median_s": 1.839094600174576,
+   "min_s": 1.801329500041902,
+   "max_s": 1.945453300140798,
+   "stages_s": {
+    "OCR, upright pass": 0.3972545999567956,
+    "OCR, turned passes": 0.5273108999244869,
+    "OCR, 2x pass for small text": 0.7183165000751615,
+    "Patterns and checksums": 0.008211000123992562,
+    "Name and address model": 0.04173419997096062,
+    "Faces": 0.053652500035241246,
+    "Barcodes": 0.015608099987730384,
+    "Paint boxes": 0.0014551999047398567,
+    "Other": 0.07555160019546747
+   },
+   "memory_after_load_mb": 942.640625,
+   "memory_now_mb": 1057.3046875,
+   "memory_peak_mb": 1991.9296875,
+   "output_bytes": 64190,
+   "new_size_grow_px": 32,
+   "same_size_runs_s": [
+    1.7650852999649942,
+    1.742155099986121,
+    1.7417358998209238
+   ],
+   "same_size_median_s": 1.742155099986121,
+   "label": "Photo with face and text, 1 MP",
+   "group": "image"
+  },
+  {
+   "id": "photo_12mp",
+   "kind": "image",
+   "input": {
+    "bytes": 4968041,
+    "pixels": 12000000
+   },
+   "repeats": 2,
+   "warmup_s": 14.233774999855086,
+   "runs_s": [
+    13.44126889994368,
+    13.734195500146598
+   ],
+   "median_s": 13.587732200045139,
+   "min_s": 13.44126889994368,
+   "max_s": 13.734195500146598,
+   "stages_s": {
+    "OCR, upright pass": 3.9017041500192136,
+    "OCR, turned passes": 8.28175309987273,
+    "Patterns and checksums": 0.004913400043733418,
+    "Name and address model": 0.04755949997343123,
+    "Faces": 0.39861199993174523,
+    "Barcodes": 0.772402850096114,
+    "Paint boxes": 0.008927100105211139,
+    "Other": 0.17186010000295937
+   },
+   "memory_after_load_mb": 946.46484375,
+   "memory_now_mb": 1043.1953125,
+   "memory_peak_mb": 3455.12109375,
+   "output_bytes": 4627568,
+   "new_size_grow_px": 32,
+   "same_size_runs_s": [
+    12.164331400068477,
+    12.115552099887282
+   ],
+   "same_size_median_s": 12.13994174997788,
+   "label": "Phone photo, 12 MP",
+   "group": "image"
+  }
+ ]
+}
