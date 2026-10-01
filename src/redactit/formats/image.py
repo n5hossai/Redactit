@@ -37,7 +37,7 @@ class Box:
 
 
 def find_boxes(img: Image.Image, engine, scope: str, *, covered: list[Box] = (), file_type: str = "png",
-               destination: str = "cli") -> tuple[list[Box], str]:
+               destination: str = "cli", site: str | None = None) -> tuple[list[Box], str]:
     """Boxes to fill (sensitive OCR text, faces, barcodes) and the redacted OCR text.
 
     `covered` are boxes the caller fills anyway (a PDF's text-layer finds). OCR characters
@@ -46,12 +46,13 @@ def find_boxes(img: Image.Image, engine, scope: str, *, covered: list[Box] = (),
     date was not found again.
     """
     rgb = img if img.mode == "RGB" else img.convert("RGB")  # no copy of a 50 MP photo
-    lines = ocr.read_lines(rgb, dial=engine.policy.effective_dial())  # the strictest dial runs every OCR pass
+    # A site's own dial counts here too: a site set to the strictest dial gets every OCR pass.
+    lines = ocr.read_lines(rgb, dial=engine.policy.effective_dial(site))
     lines = [_mask(line, covered) for line in lines] if covered else lines
     boxes, redacted = [], ""
     if lines:
         text = "\n".join(line.text for line in lines)
-        result = engine.redact(text, scope, file_type=file_type, destination=destination)
+        result = engine.redact(text, scope, file_type=file_type, destination=destination, site=site)
         starts = list(accumulate((len(line.text) + 1 for line in lines), initial=0))
         for d, replacement in zip(result.decisions, result.replacements):
             label = replacement if d.action == "pseudonymize" else None
@@ -66,7 +67,7 @@ def find_boxes(img: Image.Image, engine, scope: str, *, covered: list[Box] = (),
     codes = _barcodes(rgb) if _enabled(engine, "BARCODE") else []
     if engine.audit and (faces or codes):  # engine.redact audited the text; these have no text
         engine.audit.write("redaction", file_type=file_type, destination=destination,
-                           dial=engine.policy.effective_dial(),
+                           dial=engine.policy.effective_dial(site),
                            entity_counts={"FACE": len(faces), "BARCODE": len(codes)}, decisions=[])
     return boxes + faces + codes, redacted
 
@@ -83,11 +84,12 @@ def paint(img: Image.Image, boxes: list[Box]) -> Image.Image:
     return out
 
 
-def redact_image(data: bytes, engine, scope: str, *, destination: str = "cli") -> tuple[bytes, str, str]:
+def redact_image(data: bytes, engine, scope: str, *, destination: str = "cli",
+                 site: str | None = None) -> tuple[bytes, str, str]:
     """(re-encoded image bytes, output suffix like ".png", redacted OCR text)"""
     img, fmt = _load(data)
     suffix = ".jpg" if fmt == "JPEG" else ".png"
-    boxes, text = find_boxes(img, engine, scope, file_type=suffix[1:], destination=destination)
+    boxes, text = find_boxes(img, engine, scope, file_type=suffix[1:], destination=destination, site=site)
     painted = paint(img, boxes)
     # Raw pixels only: nothing of the input's EXIF, GPS, ICC, XMP or text chunks can reach the encoder.
     clean = Image.frombytes("RGB", painted.size, painted.tobytes())

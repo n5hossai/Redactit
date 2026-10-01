@@ -30,7 +30,7 @@ class PdfError(RedactitError, ValueError):
     pass
 
 
-def redact_pdf(data: bytes, engine, scope: str, *, destination: str = "cli",
+def redact_pdf(data: bytes, engine, scope: str, *, destination: str = "cli", site: str | None = None,
                progress: Callable[[int, int], None] | None = None) -> tuple[bytes, str]:
     """(image-only PDF bytes, redacted Markdown of the text visible on each page).
 
@@ -51,9 +51,9 @@ def redact_pdf(data: bytes, engine, scope: str, *, destination: str = "cli",
         if width * height * scale * scale > MAX_PAGE_PIXELS:
             raise PdfError(f"page {number} is too large to render safely")
         image = page.render(scale=scale).to_pil().convert("RGB")
-        layer_boxes = _text_layer(page, image.size, engine, scope, destination)
+        layer_boxes = _text_layer(page, image.size, engine, scope, destination, site)
         pixel_boxes, visible_text = find_boxes(image, engine, scope, covered=layer_boxes, file_type="pdf",
-                                               destination=destination)
+                                               destination=destination, site=site)
         _append_page(out, paint(image, layer_boxes + pixel_boxes), width, height)
         # The Markdown comes from what the page shows, not the text layer: text under a drawn
         # box or in white on white is invisible on the page and must not reappear here.
@@ -77,7 +77,7 @@ def _append_page(doc, image, width: float, height: float) -> None:
     page.gen_content()
 
 
-def _text_layer(page, size: tuple[int, int], engine, scope: str, destination: str) -> list[Box]:
+def _text_layer(page, size: tuple[int, int], engine, scope: str, destination: str, site: str | None) -> list[Box]:
     """Boxes over sensitive text-layer characters, in rendered-page pixels."""
     textpage = page.get_textpage()
     count = textpage.count_chars()
@@ -87,7 +87,7 @@ def _text_layer(page, size: tuple[int, int], engine, scope: str, destination: st
     # Emoji arrive as surrogate halves, which spaCy cannot encode; U+FFFD keeps the alignment.
     codes = (pdfium_c.FPDFText_GetUnicode(textpage.raw, i) for i in range(count))
     text = "".join("�" if 0xD800 <= c <= 0xDFFF else chr(c or 32) for c in codes)
-    result = engine.redact(text, scope, file_type="pdf", destination=destination)
+    result = engine.redact(text, scope, file_type="pdf", destination=destination, site=site)
     to_pixels = _page_to_pixels(page, size)
     boxes = []
     for decision, replacement in zip(result.decisions, result.replacements):

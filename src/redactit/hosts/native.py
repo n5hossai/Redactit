@@ -465,11 +465,11 @@ class Host:
                     raise _Cancelled  # stops between pages instead of finishing a long document
                 self._progress(job.id, "redacting", number, pages)
 
-            pdf, markdown = redact_pdf(data, engine, job.scope, progress=page, **where)
+            pdf, markdown = redact_pdf(data, engine, job.scope, site=job.site, progress=page, **where)
             return [("file", "application/pdf", pdf), ("text", "text/markdown", markdown.encode("utf-8"))]
         from redactit.formats.image import redact_image
 
-        image, suffix, _ = redact_image(data, engine, job.scope, **where)
+        image, suffix, _ = redact_image(data, engine, job.scope, site=job.site, **where)
         return [("file", "image/jpeg" if suffix == ".jpg" else "image/png", image)]
 
     def _watch_idle(self) -> None:

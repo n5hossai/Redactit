@@ -88,10 +88,10 @@ def redact_file(name: str, data: bytes, engine, scope: str, *, site: str | None 
 
     kind = SUFFIXES[Path(name).suffix.lower()]
     if kind == "image":
-        image, suffix, _ = redact_image(data, engine, scope, destination=destination)
+        image, suffix, _ = redact_image(data, engine, scope, destination=destination, site=site)
         return [(output_name(name, suffix), image)]  # the suffix comes from the decoded format
     if kind == "pdf":
-        parts = redact_pdf(data, engine, scope, destination=destination)
+        parts = redact_pdf(data, engine, scope, destination=destination, site=site)
     else:
         text = docx_to_markdown(data) if kind == "docx" else _decode(data)
         file_type = Path(name).suffix[1:].lower()
