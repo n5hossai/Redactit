@@ -1,6 +1,6 @@
 # Speed plan for the extension
 
-**Status: proposed, pending the owner's approval.** Built on the measurements in
+**Status: approved on 2026-10-01 (PR #7 merged). Large pastes get a progress state and no size cap.** Built on the measurements in
 [phase-3-timing.md](phase-3-timing.md) and on follow-up experiments. Every change here
 either gives identical output, or kept the leak sweep at 0 survivors (seeds 7 and 99,
 all formats, dial 3, 168 values each).
@@ -132,7 +132,12 @@ Each decision was challenged before it was proposed:
 - **Model loading:** "read once, load bytes" was measured with the buffer freed. It still holds +633 MB, so file locking and re-hashing were chosen instead.
 - **Benchmark method:** re-timing the same image hid the reallocation cost. Phase 4's benchmark times a new image size on every repeat and reports both figures.
 
-## What the owner needs to decide
+## What the owner decided
+
+All five were approved by merging PR #7. Large pastes keep a progress state with no size
+cap; a cap can be added later without other changes.
+
+## What was put to the owner
 
 1. Accept about 1 GB of memory per browser profile while the host is warm, with a 30-minute idle exit (decision 1).
 2. Starting on the first keystroke, paste or drop as the default, with "Keep Redactit ready" (start at page load) as an opt-in (decision 1).
