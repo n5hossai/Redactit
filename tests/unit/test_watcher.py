@@ -76,6 +76,41 @@ def test_the_outbox_cannot_be_the_inbox(tmp_path):
         Watcher(tmp_path / "in", tmp_path / "x" / ".." / "in")
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows spellings of one folder")
+@pytest.mark.parametrize("exists", [False, True], ids=["created by run", "already there"])
+@pytest.mark.parametrize("spell", [lambda p: "\\\\?\\" + str(p), lambda p: str(p).swapcase()],
+                         ids=["extended-length prefix", "case only"])
+def test_the_outbox_cannot_be_the_inbox_under_another_spelling(tmp_path, spell, exists):
+    box = tmp_path / "box"
+    if exists:
+        box.mkdir()
+        (box / "notes.txt").write_bytes(b"original")
+    stop = threading.Event()
+    stop.set()  # one pass only, if it starts at all
+    with pytest.raises(RedactitError, match="different folder"):
+        Watcher(spell(box), box, settle=0, poll=0.01, log=lambda _m: None).run(Recorder(), stop)
+    left = [p.name for p in box.iterdir()] if box.exists() else []  # refused before or after creating it
+    assert left == (["notes.txt"] if exists else [])  # no temp folder, no output
+    if exists:
+        assert (box / "notes.txt").read_bytes() == b"original"
+
+
+@pytest.mark.parametrize("layout", ["outbox inside the inbox", "inbox inside the outbox"])
+def test_one_folder_inside_the_other_leaves_originals_alone(tmp_path, layout):
+    """Only the inbox's top level is watched and outputs are bare names, so nesting is safe."""
+    if layout == "outbox inside the inbox":
+        inbox, outbox = tmp_path / "in", tmp_path / "in" / "out"
+    else:
+        inbox, outbox = tmp_path / "out" / "in", tmp_path / "out"
+    rec = Recorder()
+    with running(inbox, outbox, rec):
+        (inbox / "notes.txt").write_bytes(b"original")
+        wait_for(lambda: (outbox / "notes.txt").exists())
+        time.sleep(SETTLE * 3)  # an output read back as an input would show up as a second call
+    assert rec.calls == [("notes.txt", b"original")]
+    assert (inbox / "notes.txt").read_bytes() == b"original"
+
+
 def test_a_half_written_file_is_not_read_early(boxes):
     inbox, outbox = boxes
     rec = Recorder()

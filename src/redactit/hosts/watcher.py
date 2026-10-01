@@ -5,7 +5,8 @@ once. Each file goes through the same code as `redactit redact` (cli.redact_file
 gets the same output names. The rules:
 
 - The inbox is only ever read. Originals are never written, renamed or deleted, and the
-  outbox may not be the inbox, where an output such as notes.txt would replace its input.
+  outbox may not be the inbox under any spelling, where an output such as notes.txt would
+  replace its input.
 - A file is read only once its size and modification time have held still for
   SETTLE_SECONDS, so a file still being copied or downloaded is not redacted half-written.
 - Each output is written to a private folder inside the outbox (0700, or an owner-only
@@ -105,8 +106,7 @@ class Watcher:
     def __init__(self, inbox: Path, outbox: Path, *, settle: float = SETTLE_SECONDS,
                  poll: float = POLL_SECONDS, log: Callable[[str], None] = _log) -> None:
         self.inbox, self.outbox = Path(inbox).resolve(), Path(outbox).resolve()
-        if self.inbox == self.outbox:
-            raise RedactitError("the outbox must be a different folder from the inbox, or outputs would overwrite originals")
+        self._refuse_same_folder()  # here as well as in run, so `redactit watch` refuses before the models load
         self.settle, self.poll, self.log = settle, poll, log
         self.temp: Path | None = None  # the private folder outputs are written in; exists only while running
         self._lock = threading.Lock()  # guards _pending, which the observer's thread adds to
@@ -124,6 +124,7 @@ class Watcher:
         stop = stop or threading.Event()
         for folder in (self.inbox, self.outbox):  # a new one is private: the inbox holds originals
             folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._refuse_same_folder()  # both exist now, so every spelling of one folder is caught
         self.temp = _private_dir(self.outbox)
         observer = Observer()
         try:
@@ -139,6 +140,21 @@ class Watcher:
             if observer.is_alive():
                 observer.join()
             self._remove_temp()
+
+    def _refuse_same_folder(self) -> None:
+        """Refuse an outbox that is the inbox under any spelling.
+
+        Resolved paths alone miss spellings that resolve() keeps apart, such as the
+        extended-length form of a Windows path; samefile compares the folders' volume and
+        file IDs, so it runs once both exist. One folder inside the other is allowed: only
+        the inbox's top level is watched, and outputs are bare names written to the
+        outbox's top level, so no output can replace an input or be read back as one.
+        """
+        same = self.inbox == self.outbox
+        if not same and self.inbox.is_dir() and self.outbox.is_dir():
+            same = os.path.samefile(self.inbox, self.outbox)
+        if same:
+            raise RedactitError("the outbox must be a different folder from the inbox, or outputs would overwrite originals")
 
     def _remove_temp(self) -> None:
         # Every write deletes its own temp file in `finally`, so this is normally an empty
