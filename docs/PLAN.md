@@ -75,7 +75,12 @@ outbox, through the same per-file code and output names as `redactit redact`
   `--outbox` move them, never the environment, and the outbox may not be the inbox. New
   folders are created private. Only the inbox's top level is watched.
 - The inbox is only read. A file is read once its size and mtime have held for 2 s, so a
-  file still being copied is not redacted half-written.
+  file still being copied is not redacted half-written. Symlinks and reparse points are
+  skipped, never followed out of the inbox.
+- Two inputs whose outputs share a name (notes.docx and notes.docx.md, scan.pdf and
+  scan.pdf.md) are never both written: the later one is skipped with a message. `redactit
+  redact` does the same, and refuses an `--out` folder where an output would replace an
+  input.
 - Each version of a file is redacted once. While running, a fingerprint (file ID, size,
   mtime) tells a real change from a read. At start-up, a file whose outputs are all newer
   than it is skipped; "newer" also counts creation time (Windows) or inode change time,

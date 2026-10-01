@@ -344,6 +344,33 @@ def test_bad_files_are_logged_without_their_names_or_content(boxes):
     assert {p.name: p.read_bytes() for p in inbox.iterdir()} == files  # originals untouched
 
 
+def test_two_inputs_with_one_output_name_never_overwrite_each_other(boxes):
+    """notes.docx and notes.docx.md both write notes.docx.md: the later one is skipped."""
+    inbox, outbox = boxes
+    rec = Recorder()
+    with running(inbox, outbox, rec) as (_, log):
+        (inbox / "notes.docx").write_bytes(b"first")
+        wait_for(lambda: (outbox / "notes.docx.md").exists())
+        (inbox / "notes.docx.md").write_bytes(b"second, later")
+        wait_for(lambda: len(log) >= 3)
+    assert log[1:] == ["redacted a .docx file (1 output)",
+                       "skipped a .md file: another input in the inbox has an output of the same name"]
+    assert (outbox / "notes.docx.md").read_text(encoding="utf-8") == "redacted 5 bytes\n"
+
+
+def test_an_output_name_from_an_earlier_run_stays_with_its_input(boxes):
+    inbox, outbox = boxes
+    rec = Recorder()
+    with running(inbox, outbox, rec):
+        (inbox / "scan.pdf").write_bytes(b"first")
+        wait_for(lambda: (outbox / "scan.pdf.md").exists())
+    with running(inbox, outbox, rec) as (_, log):  # scan.pdf is done, but its outputs stay claimed
+        (inbox / "scan.pdf.md").write_bytes(b"second, later")
+        wait_for(lambda: len(log) >= 2)
+    assert log[1:] == ["skipped a .md file: another input in the inbox has an output of the same name"]
+    assert (outbox / "scan.pdf.md").read_text(encoding="utf-8") == "redacted 5 bytes\n"
+
+
 def test_a_detection_timeout_skips_the_file_and_writes_nothing(boxes):
     class TimingOut:
         def redact(self, *_args, **_kwargs):

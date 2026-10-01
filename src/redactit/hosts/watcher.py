@@ -133,6 +133,7 @@ class Watcher:
         # replaced or edited (a new fingerprint) is redone.
         self._done: dict[Path, tuple[int, int, int, int]] = {}
         self._unreadable: set[Path] = set()  # files whose "cannot be read yet" was logged once
+        self._claims: dict[str, Path] = {}  # output name, in lower case -> the input it was written for
 
     # --- lifecycle -------------------------------------------------------------------------
 
@@ -216,6 +217,8 @@ class Watcher:
                 continue
             if stat.S_ISREG(st.st_mode) and not _is_link(st) and self._outputs_newer(path.name, st):
                 self._done[path] = _fingerprint(st)
+                for suffix in output_suffixes(path.name):  # its outputs are already in the outbox
+                    self._claims.setdefault(output_name(path.name, suffix).lower(), path)
             else:
                 self.saw(path)
 
@@ -299,6 +302,7 @@ class Watcher:
             return
         try:
             outputs = convert(name, data)
+            self._claim(path, [output for output, _ in outputs])  # refuses before anything is written
             self._publish(outputs)
         except RedactitError as e:  # our own errors never quote the input
             self.log(f"skipped {what}: {e}")
@@ -309,6 +313,23 @@ class Watcher:
         else:
             self.log(f"redacted {what} ({len(outputs)} output{'s' if len(outputs) > 1 else ''})")
         self._done[path] = fingerprint  # redone only once the file itself changes
+
+    def _claim(self, path: Path, names: list[str]) -> None:
+        """Reserve output `names` for the input at `path`, or refuse with RedactitError.
+
+        Two inputs can share an output name: notes.docx and notes.docx.md both write
+        notes.docx.md, as do scan.pdf and scan.pdf.md, or photo.webp and photo.webp.png.
+        The first input keeps the name while it stays in the inbox, and the later one is
+        skipped instead of writing over its output. Names compare in lower case, as the
+        outbox does on Windows and macOS.
+        """
+        keys = [name.lower() for name in names]
+        for key in keys:
+            owner = self._claims.get(key)
+            if owner is not None and owner != path and os.path.lexists(owner):
+                raise RedactitError("another input in the inbox has an output of the same name")
+        for key in keys:
+            self._claims[key] = path
 
     def _publish(self, outputs: list[tuple[str, str | bytes]]) -> None:
         """Write every output to the private folder, then rename each into the outbox.
