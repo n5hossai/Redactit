@@ -1,4 +1,4 @@
-"""Command-line interface: `redactit redact`, `redactit setup-models`, `redactit host`."""
+"""Command-line interface: `redactit redact`, `watch`, `setup-models` and `host`."""
 
 import argparse
 import io
@@ -135,6 +135,33 @@ def _redact(args: argparse.Namespace) -> int:
     return 0
 
 
+def _watch(args: argparse.Namespace) -> int:
+    from redactit import models, safety
+    from redactit.hosts import watcher
+
+    inbox, outbox = watcher.default_folders()
+    watch = watcher.Watcher(args.inbox or inbox, args.outbox or outbox)  # refuses outbox == inbox before models load
+    watcher.stop_on_signals()
+    try:
+        safety.block_network()
+        pending = models.verify(models.TEXT_MODELS)
+        from redactit.formats import docx, image, pdf  # noqa: F401 - loaded now, while the hash runs
+
+        engine = open_engine(args.policy, pending)  # one engine for the whole run: the cold start is paid once
+        engine.warm_text()
+        engine.warm_images()  # now, so the first PDF or image dropped does not wait for OCR to load
+
+        def convert(name: str, data: bytes) -> list[tuple[str, str | bytes]]:
+            # A fresh pseudonym scope per file unless --scope links them: a watcher runs for
+            # days, and its files go to different chats, which shared labels would link.
+            return redact_file(name, data, engine, args.scope or uuid.uuid4().hex, destination="outbox")
+
+        watch.run(convert)
+    except KeyboardInterrupt:  # Ctrl+C is how a watcher stops; its temp folder is already gone
+        print("redactit watch: stopped", file=sys.stderr)
+    return 0
+
+
 def _setup_models(_args: argparse.Namespace) -> int:
     from redactit import models
 
@@ -161,6 +188,13 @@ def main(argv: list[str] | None = None) -> int:
     redact.add_argument("--scope", help="reuse pseudonyms across calls that share this name")
     redact.add_argument("--site", help="apply this site's policy rules, e.g. chatgpt.com")
     redact.set_defaults(run=_redact)
+
+    watch = sub.add_parser("watch", help="redact every file dropped into an inbox folder into an outbox folder")
+    watch.add_argument("--inbox", type=Path, help="folder to watch (default: inbox in Redactit's data folder)")
+    watch.add_argument("--outbox", type=Path, help="folder for redacted files (default: outbox in Redactit's data folder)")
+    watch.add_argument("--policy", type=Path, help="policy file (default: user policy if present)")
+    watch.add_argument("--scope", help="reuse one set of pseudonyms for every file (default: a new set per file)")
+    watch.set_defaults(run=_watch)
 
     setup = sub.add_parser("setup-models", help="download and verify the pinned models (needs network once)")
     setup.set_defaults(run=_setup_models)
