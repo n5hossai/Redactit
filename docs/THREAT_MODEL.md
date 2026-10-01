@@ -8,7 +8,8 @@ Update this file in the same PR as any change that moves a boundary.
 
 | Asset | Where it lives | Why it matters |
 |---|---|---|
-| Original content (text, files, clipboard) | User's machine, engine memory, temp dir while processing | The thing we exist to keep away from LLM providers |
+| Original content (text, files, clipboard) | User's machine (including the watcher's inbox), engine memory | The thing we exist to keep away from LLM providers |
+| Redacted copies | The watcher's outbox and its private staging folder; the clipboard after `redactit clip` | Pseudonymised, but file names and context stay; how long the outbox keeps them is undecided (PLAN §12) |
 | Pseudonym mappings (`[PERSON_1]` to real value) | Encrypted vault on disk | Reverses the redaction for anyone who reads it |
 | Vault key | OS keychain | Decrypts the vault |
 | Policy (managed + user) | `policy.yaml` files | Weakening it silently lets data through |
@@ -74,12 +75,12 @@ flowchart LR
 | T8 | Another extension or process drives the native host | B2 | `allowed_origins` with one fixed ID; host also checks the origin argument Chrome passes against the installed manifest | `tests/test_host.py`: a wrong origin and the unfilled template are refused before the engine loads; `tests/unit/test_native.py`: the manifest must allow exactly one well-formed ID. Registration itself: installer test (Phase 7) |
 | T9 | Oversized or malformed native messages crash the host or truncate data | B2 | Length-prefixed frames, 512 KiB chunks with checked sequence numbers and totals, strict JSON schema, caps per message, payload and in-flight requests | `tests/unit/test_native.py` (schema, reassembly); `tests/test_host.py` (bad length, bad JSON, oversized message, wrong sequence number, unknown type, caps; a multi-MB PDF and image byte-identical to the engine's output) |
 | T10 | Raw values end up in logs, exceptions or the audit file | B3 | Audit stores types, counts, rule IDs and scores only; logging filter; sanitised exception type; the native host's errors are fixed text and library output on its stderr is withheld | Leak test scans logs and audit file (Phase 2); `tests/test_host.py` checks the host's errors, stderr and audit file |
-| T11 | Temp files are left behind or readable by others | B3 | Private dir (0700 or user-only ACL), deleted in `finally`; memory by default | Formats and the native host work in memory and write no temp files; the test lands with the first that does (Phase 4 folder watcher) |
+| T11 | Temp files are left behind or readable by others | B3 | Memory by default; formats and the native host write no temp files. The folder watcher stages each output in a `mkdtemp` folder inside the outbox (0700; on Windows a protected owner-only ACL, Python 3.12.4 or later) and renames it into place. Each write deletes its temp file in `finally`, the folder is removed in `finally`, and SIGTERM and Ctrl+Break are turned into Ctrl+C so every stop path runs that cleanup | `tests/unit/test_watcher.py`: the folder is private (mode or `icacls`) and empty after every file, after a failed rename and after Ctrl+C in the middle of a write; `tests/test_watch.py`: none left after a round trip, or after `redactit watch` is stopped from the keyboard |
 | T12 | Vault read from disk | B3 | AES-256-GCM, key in OS keychain, 30-day purge | Vault unit tests (Phase 2) |
 | T13 | User weakens the policy | Engine | Managed layer, tighten-only merge, locked types | Policy merge tests (Phase 2) |
 | T14 | Engine phones home or downloads at runtime | B4 | Only `setup-models` has network code; `safety.block_network()` refuses IP sockets and DNS in the engine process; sockets disabled in tests | `tests/test_offline.py` |
 | T15 | Tampered or swapped model file | B4 | SHA-256 verified on every load, no hash cache, including RapidOCR's bundled files; on Windows the file is held against writes and deletes until loaded, elsewhere hashed again after loading; download only in setup | `tests/unit/test_models.py`: tampered GLiNER, YuNet and RapidOCR files refused; a write, rename or delete during the hold fails (Windows); a change during loading is caught by the second hash |
-| T16 | Clipboard captures a password-manager secret | Engine | Items marked concealed are skipped; redaction only on a keypress, no monitoring | Clipboard tests per OS (Phase 4) |
+| T16 | Clipboard captures a password-manager secret | Engine | Items marked concealed are skipped before their text is read (markers per OS in PLAN §2.1), and the engine is never loaded for them; redaction only on a keypress, no monitoring | `tests/unit/test_clipboard.py`: Windows, macOS and Linux markers with the OS calls replaced; `tests/test_clip.py`: a concealed item on the real Windows clipboard is left unchanged (skipped where no clipboard can be opened) |
 | T17 | Copyleft dependency creeps in | Supply chain | License test fails on anything outside MIT/Apache/BSD unless flagged | `tests/test_licenses.py` |
 | T18 | Remote code in the extension | Supply chain | MV3 CSP, no `eval`, no remote scripts, no build step | Manifest review; CSP in `manifest.json` |
 
@@ -91,6 +92,22 @@ flowchart LR
   Company dictionaries and review mode are the mitigation.
 - **Clipboard concealment on Linux** relies on a KDE-originated hint. GNOME and some Wayland
   compositors do not set it, so a copied password there looks like normal text.
+- **Unmarked secrets on the clipboard.** Concealment works only when the password manager
+  marks the item. An unmarked password is redacted like any other text: it passes
+  through the engine's memory and comes back changed only if a detector recognises it.
+- **Clipboard history.** `redactit clip` replaces the current item only. Windows
+  clipboard history (Win+V), cloud clipboard sync and third-party clipboard managers keep
+  the original copy.
+- **Watcher file names.** Outputs keep their input's name, and a name can itself be
+  sensitive. Log lines leave names out; the outbox cannot.
+- **Hard stop of the watcher.** A power cut or a forced kill skips `finally` and can leave
+  the private staging folder in the outbox, holding at most one partial output. That
+  output is already redacted; original content is never written there.
+- **Watcher restart on Windows.** At start-up, a file counts as done when its outputs are
+  newer than its times. A file moved in from the same drive, or copied over an input of
+  the same name, while the watcher was stopped can keep older times. It is then not
+  redone, and the outbox keeps the earlier version's output. While the watcher runs, the
+  file's new fingerprint catches the change.
 - **Same-user malware** can read the keychain and originals. Out of scope.
 - **Leak-test span dump.** Precision needs digests of redacted values. Unsalted digests of
   low-entropy IDs (SIN, SSN) are reversible, so that dump is test-only, used on synthetic
@@ -98,5 +115,6 @@ flowchart LR
 - **Model swap race outside Windows.** A process with write access to the model folder
   could swap a model in and back between the hash and the second hash on macOS or Linux.
   Such a process could already change the installed packages.
-- **macOS shortcut binding** needs one manual step; until it is done, clipboard redaction
-  on macOS runs only from the CLI.
+- **macOS shortcut binding** needs one manual step: the user assigns the key to the
+  installed Quick Action (PLAN §2.1). Until then, clipboard redaction on macOS runs only
+  from the CLI.
