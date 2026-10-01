@@ -22,6 +22,12 @@ Markdown, say) are concatenated, chunked the same way, and split again by their 
 load). Requests are answered in arrival order; one that arrives while warming waits. An
 error's message is fixed text or a RedactitError's, so it never quotes the input.
 
+An error's `code` is one of MESSAGES' keys and stays stable across versions. A request
+that fails is answered with exactly one error and no result. Among them: engine_unavailable
+when the engine, or for PDFs and images OCR, could not start; bad_input when the payload
+cannot be read as its kind; detection_timeout when a detection pattern ran past its time
+limit, so the input was not fully checked; internal for anything else.
+
 Threads, not asyncio: on Windows asyncio needs a socket pair, which the engine's network
 block refuses. One thread reads frames, one loads the engine (text first, then OCR), one
 works through the queue, and one ends the process after IDLE_SECONDS without work.
@@ -75,6 +81,7 @@ MESSAGES = {
     "busy": f"too many requests in progress (at most {MAX_IN_FLIGHT} and {MAX_BUFFERED // 2**20} MiB)",
     "cancelled": "the request was cancelled",
     "bad_input": "the input could not be read",
+    "detection_timeout": "a detection pattern ran too long, so the input was not fully checked; nothing was redacted",
     "engine_unavailable": "the redaction engine could not start",
     "internal": "internal error (details withheld: they may contain input text)",
     "origin_refused": "this caller is not allowed to use Redactit",
@@ -490,12 +497,15 @@ def _load_failure(exc: Exception, stage: str) -> Reject:
 
 
 def _request_failure(exc: Exception, rid: str) -> Reject:
+    from redactit.detect.registry import PatternTimeout
     from redactit.models import ModelError
     from redactit.types import RedactitError
     from redactit.vault import VaultError
 
     if isinstance(exc, (ModelError, VaultError)):
         return Reject("engine_unavailable", str(exc), rid)
+    if isinstance(exc, PatternTimeout):  # the input was fine; the engine could not finish checking it
+        return Reject("detection_timeout", rid=rid)
     if isinstance(exc, RedactitError):  # an unreadable PDF, image or Word file
         return Reject("bad_input", str(exc), rid)
     if isinstance(exc, UnicodeDecodeError):
