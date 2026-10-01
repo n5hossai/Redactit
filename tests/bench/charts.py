@@ -138,14 +138,18 @@ def speed(report: dict, out: Path) -> None:
             first_slower = s["warmup_s"] - s["median_s"] >= 0.5  # a ring only where the first file costs more
             if first_slower:
                 svg.dot(x(s["warmup_s"]), cy, "s2", hollow=True)
+            if "same_size_median_s" in s:  # images: the same picture again, beside a new size each time
+                svg.dot(x(s["same_size_median_s"]), cy, "s3")
             svg.dot(x(s["median_s"]), cy, "s1")
             label_x = max(x(s["max_s"]), x(s["warmup_s"]) if first_slower else 0) + 10
             svg.text(min(label_x, W - 52), cy + 4, secs(s["median_s"]), "v")
             y += row_h
     svg.dot(25, 70, "s1")
-    svg.text(35, 74, "Typical run (line: fastest to slowest)", "sub")
-    svg.dot(265, 70, "s2", hollow=True)
-    svg.text(275, 74, "First file after the engine starts", "sub")
+    svg.text(35, 74, "Typical run; images at a new size each time", "sub")
+    svg.dot(340, 70, "s3")
+    svg.text(350, 74, "Same image again", "sub")
+    svg.dot(480, 70, "s2", hollow=True)
+    svg.text(490, 74, "First file after the engine starts", "sub")
     svg.save(out / "speed.svg")
 
 
@@ -227,9 +231,11 @@ def scaling(report: dict, out: Path) -> None:
                    ("PDF", "s3", [(by_id[i]["input"]["pages"], by_id[i]["median_s"])
                                   for i in ("pdf_digital_1p", "pdf_digital_4p", "pdf_digital_10p") if i in by_id])],
          "pages", False),
-        ("Screenshot size", [("Screenshot", "s1", [(by_id[i]["input"]["pixels"] / 1e6, by_id[i]["median_s"])
-                                                   for i in ("img_720p", "img_1080p", "img_1440p", "img_4k")
-                                                   if i in by_id])],
+        ("Screenshot size", [(label, colour, [(by_id[i]["input"]["pixels"] / 1e6, by_id[i][key])
+                                              for i in ("img_720p", "img_1080p", "img_1440p", "img_4k")
+                                              if key in by_id.get(i, {})])
+                             for label, colour, key in (("New size", "s1", "median_s"),
+                                                        ("Same image", "s3", "same_size_median_s"))],
          "megapixels", False),
     ]
     height, pw, gap, top, ph = 310, 200, 50, 84, 160
@@ -260,6 +266,8 @@ def scaling(report: dict, out: Path) -> None:
                 last = fx(v)
         svg.text(x0 + pw, top + ph + 30, unit, "m", "end")
         for label, colour, ps in series:
+            if not ps:  # a report from before same-size runs were recorded
+                continue
             if len(ps) > 1:
                 path = " ".join(f"{'M' if i == 0 else 'L'}{fx(a):.1f},{fy(b):.1f}" for i, (a, b) in enumerate(ps))
                 svg.add(f'<path d="{path}" fill="none" stroke="var(--{colour})" stroke-width="2" '
