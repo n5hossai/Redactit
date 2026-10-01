@@ -39,7 +39,8 @@ class Engine:
         imports, so the half-second hash runs beside them instead of after."""
         safety.block_network()  # here, not only in the CLI, so every interface runs behind it
         self.policy, self.vault, self.audit = policy, vault, audit
-        self.detector = Detector(company_terms=policy.company_terms())
+        with models.released_on_error(verified):  # a failure here must not leave the model files locked
+            self.detector = Detector(company_terms=policy.company_terms())
         # The files stay locked (or are hashed again) until the session holds them, so the
         # bytes loaded are the bytes hashed (THREAT_MODEL T15).
         with (verified or models.verify(models.TEXT_MODELS)) as paths:

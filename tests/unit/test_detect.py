@@ -527,6 +527,17 @@ def test_a_pattern_timeout_stops_detection_instead_of_skipping(det, monkeypatch)
         det.detect("Contact priya.okafor@corp.local about card 4111 1111 1111 1111. " * 200)
 
 
+def test_shared_recognizers_are_wrapped_once_however_many_detectors_are_built(det):
+    from redactit.detect import patterns, registry
+
+    for _ in range(3):
+        Detector()
+    for recognizer in (patterns.ADDRESS, patterns.EMAIL, patterns.PHONE, patterns.UK_NINO):
+        for pattern in recognizer.patterns:
+            assert isinstance(pattern.compiled_regex, registry._FailClosed)
+            assert not isinstance(pattern.compiled_regex.wrapped, registry._FailClosed)  # depth 1
+
+
 def test_presidios_own_timeout_setting_cannot_switch_patterns_off(det, monkeypatch):
     import presidio_analyzer.pattern_recognizer as presidio_patterns
 

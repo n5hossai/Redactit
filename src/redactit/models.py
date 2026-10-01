@@ -13,6 +13,7 @@ import os
 import sys
 import threading
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 import platformdirs
@@ -110,10 +111,30 @@ class Verification:
         finally:
             self._close()
 
+    def close(self) -> None:
+        """Release the files without loading them, for a caller that fails before its
+        `with` block. Waits for the hashing thread, which may still be opening files."""
+        self._thread.join()
+        self._close()
+
     def _close(self) -> None:
         for f in self._files:
             f.close()
         self._files.clear()
+
+
+@contextmanager
+def released_on_error(verification: Verification | None):
+    """Close `verification` if the block raises: a bad policy, a keychain error or a
+    failed import before the loader's `with`. Otherwise Windows keeps the model files
+    locked against writes and deletes, `redactit setup-models` included, for as long as
+    the process lives. Closing twice is harmless."""
+    try:
+        yield
+    except BaseException:
+        if verification is not None:
+            verification.close()
+        raise
 
 
 def fetch_all() -> list[str]:

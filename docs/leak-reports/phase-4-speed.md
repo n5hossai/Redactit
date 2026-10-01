@@ -36,6 +36,17 @@ and faces are synthetic.
 Dial 3 ran on commit 7754081, and dial 5 on 2ca72b8. The later commit adds only the
 folder watcher and clipboard work, which changes no detection or format code.
 
+A confirmation sweep then ran on 1645ed9, the end of this phase, after the fixes that
+apply a site's dial to OCR, name tied overlaps the same way in every run and stop a
+redaction when a pattern times out. It used seeds 7 and 99 at dial 3, all formats:
+
+| Dial | Formats | Planted values | Survivors | Metadata / text-layer / face violations | Precision |
+|---|---|---:|---:|---:|---:|
+| 3, seeds 7 and 99 | txt, md, docx | 144 | **0** | 0 | 153 / 159 = 0.962 |
+| 3, seeds 7 and 99 | pdf, png, jpg | 300 | **0** | 0 | 244 / 266 = 0.917 |
+
+Faces: 8 of 8 removed.
+
 | Entity type (pdf, png, jpg, dial 3) | Planted | Removed |
 |---|---:|---:|
 | PERSON | 185 | 185 |
@@ -113,13 +124,6 @@ None. Both sweeps found 0 survivors and 0 violations on their first run.
 - **What the gate cannot see.** The gate trusts upright text detection to box turned text,
   which it did for every stress value. A page with confident upright text and a turned value
   the detector never boxes would lose the turned passes at dials 3-4.
-- **A site's dial does not reach OCR.** Images and PDFs read the policy's dial without a
-  site, so a site set to dial 5 does not force every OCR pass yet.
-- **Tie labels vary between runs.** Presidio breaks ties through a `set()`, so a bare
-  9-digit run is labelled PASSPORT in one process and US_SSN in another. Both are masked.
-  The text is the same; the audit log's type differs. This predates Phase 4.
-- **Regex timeouts fail open.** Presidio skips a pattern whose search runs past 60 s. The
-  anchored address rules ignore that timeout; the other recognizers keep it.
 - **Address-heavy pastes are still slow in the address rules.** A 200 KB paste that is
   nothing but postcodes takes about 6.5 s there, as before: every position is near one.
 - **spaCy is slow on number-heavy text.** 200 KB of digit runs is about 80,000 tokens, at

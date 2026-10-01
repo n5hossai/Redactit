@@ -60,8 +60,10 @@ def test_clip_redacts_the_clipboard_in_place(board, cli_env, capsys):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="sets a Windows clipboard format")
-def test_clip_leaves_a_concealed_item_alone(board, capsys):
-    """A password manager's copy, as KeePass and others mark it: no engine, no change."""
+def test_clip_leaves_a_concealed_item_alone(board, cli_env, capsys):
+    """A password manager's copy, as KeePass and others mark it: no engine, no change.
+    Run in the isolated keychain and data folder all the same: if the concealment check
+    ever regressed, the engine it loaded would otherwise open the real vault."""
     secret = "Pr1ya-Okafor-hunter2"  # synthetic
     exclude = board.user32.RegisterClipboardFormatW("ExcludeClipboardContentFromMonitorProcessing")
     with board._open():

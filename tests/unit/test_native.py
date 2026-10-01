@@ -5,11 +5,19 @@ Round trips through a real host process are in tests/test_host.py.
 
 import base64
 import json
+import os
+import queue
+import struct
+import threading
+from collections import defaultdict
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from redactit.detect.registry import PatternTimeout
 from redactit.hosts import native
 from redactit.hosts.native import RAW_CHUNK, Job, Reject, parse
+from redactit.models import ModelError
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "installers" / "host-manifest.json"
 EXTENSION = "chrome-extension://" + "abcdefghijklmnop" * 2 + "/"
@@ -164,3 +172,166 @@ def test_frames_to_the_extension_stay_under_chromes_limit():
     largest = native._frame({"type": "chunk", "id": "x" * 64, "seq": 10**6, "total": 10**6,
                              "data": base64.b64encode(b"\xff" * RAW_CHUNK).decode("ascii")})
     assert native.CHUNK <= len(largest) <= native.TO_EXTENSION_MAX and len(largest) <= native.MAX_FRAME
+
+
+# --- The host in this process, over pipes, with a stand-in engine ---------------------------
+# Every way the engine can fail must end each request with one error and no result.
+
+
+class StubEngine:
+    """Stands in for pipeline.Engine; each stage can be made to fail."""
+
+    def __init__(self, *, text_fails=None, images_fail=None, redact_raises=None):
+        self.text_fails, self.images_fail, self.redact_raises = text_fails, images_fail, redact_raises
+        self.sites = []
+
+    def warm_text(self):
+        if self.text_fails:
+            raise self.text_fails
+
+    def warm_images(self):
+        if self.images_fail:
+            raise self.images_fail
+
+    def redact(self, text, scope, *, site=None, **_kwargs):
+        self.sites.append(site)
+        if self.redact_raises:
+            raise self.redact_raises
+        return SimpleNamespace(text=text.replace(SECRET, "[PERSON_1]"), decisions=[])
+
+
+class Wire:
+    """A native.Host on its own threads, spoken to through two pipes as Chrome would."""
+
+    def __init__(self, load_engine):
+        self._to_host, self._sender = os.pipe()
+        self._receiver, self._from_host = os.pipe()
+        self.host = native.Host(self._to_host, self._from_host, load_engine, idle_seconds=600)
+        self.received: list[dict] = []
+        self._routes = defaultdict(queue.Queue)
+        self._served = threading.Thread(target=self.host.run, daemon=True)
+        self._served.start()
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        while (head := native._read_exact(self._receiver, 4)) is not None:
+            msg = json.loads(native._read_exact(self._receiver, struct.unpack("=I", head)[0]))
+            self.received.append(msg)
+            self._routes[msg.get("id")].put(msg)
+
+    def send(self, msg):
+        native._write_all(self._sender, native._frame(msg))
+
+    def request(self, rid, kind, payload: bytes, site="claude.ai"):
+        header = {"type": "redact_text" if kind == "text" else "redact_file", "id": rid, "scope": "s1",
+                  "site": site, "size": len(payload), "total": 1}
+        if kind != "text":
+            header["kind"] = kind
+        self.send(header)
+        self.send(chunk(0, payload, 1, rid))
+
+    def next(self, rid, timeout=30):
+        return self._routes[rid].get(timeout=timeout)
+
+    def outcome(self, rid):
+        """The first error or result for `rid`, passing over progress frames."""
+        while (msg := self.next(rid))["type"] == "progress":
+            pass
+        return msg
+
+    def close(self):
+        os.close(self._sender)  # end of input, as when Chrome closes the port
+        self._served.join(10)
+        for fd in (self._from_host, self._to_host, self._receiver):
+            os.close(fd)
+        everything = json.dumps(self.received)
+        assert SECRET not in everything and "Okafor" not in everything
+
+
+@pytest.fixture
+def wire():
+    wires = []
+
+    def start(load_engine):
+        wires.append(Wire(load_engine))
+        return wires[-1]
+
+    yield start
+    for w in wires:
+        w.close()
+
+
+PAYLOADS = {"text": f"Call {SECRET}.".encode(), "txt": f"Call {SECRET}.".encode(),
+            "pdf": b"%PDF-1.7 " + SECRET.encode(), "image": b"\x89PNG " + SECRET.encode()}
+
+
+def _cannot_load():
+    raise RuntimeError(f"model choked on {SECRET}")
+
+
+@pytest.mark.parametrize("load", [
+    _cannot_load,
+    lambda: StubEngine(text_fails=ModelError("gliner/model.onnx is not installed; run `redactit setup-models` again")),
+], ids=["engine cannot be built", "text warm-up fails"])
+def test_text_detection_that_cannot_load_refuses_every_request(wire, load):
+    w = wire(load)
+    assert w.next(None)["state"] == "warming"
+    announced = w.next(None)
+    assert (announced["type"], announced["code"]) == ("error", "engine_unavailable")
+    assert w.next(None)["state"] == "unavailable"
+    for rid, kind in enumerate(PAYLOADS):
+        w.request(f"r{rid}", kind, PAYLOADS[kind])
+        answer = w.outcome(f"r{rid}")
+        assert (answer["type"], answer["code"]) == ("error", "engine_unavailable")
+    w.send({"type": "ping", "id": "p1"})
+    assert w.next("p1")["state"] == "unavailable"
+    assert not [m for m in w.received if m["type"] == "result"]
+
+
+def test_ocr_that_cannot_load_still_serves_text_and_refuses_pdfs_and_images(wire):
+    engine = StubEngine(images_fail=RuntimeError(f"OCR choked on {SECRET}"))
+    w = wire(lambda: engine)
+    assert [w.next(None)["state"] for _ in range(2)] == ["warming", "ready-text"]
+    announced = w.next(None)
+    assert (announced["type"], announced["code"]) == ("error", "engine_unavailable")
+    for kind in PAYLOADS:
+        w.request(kind, kind, PAYLOADS[kind])
+    for kind in ("pdf", "image"):
+        answer = w.outcome(kind)
+        assert (answer["type"], answer["code"]) == ("error", "engine_unavailable")
+    for kind in ("text", "txt"):
+        answer = w.outcome(kind)
+        assert answer["type"] == "result"
+        parts = [w.next(kind) for _ in range(answer["total"])]
+        assert base64.b64decode(parts[0]["data"]) == b"Call [PERSON_1]."
+    w.send({"type": "ping", "id": "p1"})
+    assert w.next("p1")["state"] == "ready-text"  # never ready-all
+
+
+def test_each_requests_site_reaches_its_redaction(wire, monkeypatch):
+    from redactit.formats import image, pdf
+
+    sites = []
+    monkeypatch.setattr(pdf, "redact_pdf",
+                        lambda data, engine, scope, *, site, **kw: sites.append(("pdf", site)) or (b"%PDF", "## Page 1\n"))
+    monkeypatch.setattr(image, "redact_image",
+                        lambda data, engine, scope, *, site, **kw: sites.append(("image", site)) or (b"PNG", ".png", ""))
+    engine = StubEngine()
+    w = wire(lambda: engine)
+    requests = [("text", "claude.ai"), ("txt", "chatgpt.com"), ("pdf", "gemini.google.com"), ("image", "claude.ai")]
+    for rid, (kind, site) in enumerate(requests):
+        w.request(f"s{rid}", kind, PAYLOADS[kind], site=site)
+        assert w.outcome(f"s{rid}")["type"] == "result"
+    assert engine.sites == ["claude.ai", "chatgpt.com"]
+    assert sites == [("pdf", "gemini.google.com"), ("image", "claude.ai")]
+
+
+def test_a_detection_timeout_is_its_own_error_and_returns_nothing(wire):
+    w = wire(lambda: StubEngine(redact_raises=PatternTimeout("a detection pattern timed out; nothing was redacted")))
+    w.request("t1", "text", PAYLOADS["text"])
+    answer = w.outcome("t1")
+    assert (answer["type"], answer["code"]) == ("error", "detection_timeout")
+    assert answer["message"] == native.MESSAGES["detection_timeout"]
+    w.send({"type": "ping", "id": "p1"})
+    w.next("p1")  # answered after the request, so nothing more is coming for it
+    assert not [m for m in w.received if m.get("id") == "t1" and m["type"] in ("result", "chunk")]

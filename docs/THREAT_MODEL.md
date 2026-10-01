@@ -79,8 +79,8 @@ flowchart LR
 | T12 | Vault read from disk | B3 | AES-256-GCM, key in OS keychain, 30-day purge | Vault unit tests (Phase 2) |
 | T13 | User weakens the policy | Engine | Managed layer, tighten-only merge, locked types | Policy merge tests (Phase 2) |
 | T14 | Engine phones home or downloads at runtime | B4 | Only `setup-models` has network code; `safety.block_network()` refuses IP sockets and DNS in the engine process; sockets disabled in tests | `tests/test_offline.py` |
-| T15 | Tampered or swapped model file | B4 | SHA-256 verified on every load, no hash cache, including RapidOCR's bundled files; on Windows the file is held against writes and deletes until loaded, elsewhere hashed again after loading; download only in setup | `tests/unit/test_models.py`: tampered GLiNER, YuNet and RapidOCR files refused; a write, rename or delete during the hold fails (Windows); a change during loading is caught by the second hash |
-| T16 | Clipboard captures a password-manager secret | Engine | Items marked concealed are skipped before their text is read (markers per OS in PLAN §2.1), and the engine is never loaded for them; redaction only on a keypress, no monitoring | `tests/unit/test_clipboard.py`: Windows, macOS and Linux markers with the OS calls replaced; `tests/test_clip.py`: a concealed item on the real Windows clipboard is left unchanged (skipped where no clipboard can be opened) |
+| T15 | Tampered or swapped model file | B4 | SHA-256 verified on every load, no hash cache, including RapidOCR's bundled files; on Windows the file is held against writes and deletes until loaded (the file, not the folders on its path: §5), elsewhere hashed again after loading; download only in setup | `tests/unit/test_models.py`: tampered GLiNER, YuNet and RapidOCR files refused; a write, rename or delete during the hold fails (Windows); a change during loading is caught by the second hash |
+| T16 | Clipboard captures a password-manager secret | Engine | Items marked concealed are skipped before their text is read (markers per OS in PLAN §2.1), and the engine is never loaded for them; on macOS and Linux, where the check and the read are separate calls, text is refused if the clipboard changed or became concealed in between; redaction only on a keypress, no monitoring | `tests/unit/test_clipboard.py`: Windows, macOS and Linux markers with the OS calls replaced, and a change between check and read; `tests/test_clip.py`: a concealed item on the real Windows clipboard is left unchanged (skipped where no clipboard can be opened) |
 | T17 | Copyleft dependency creeps in | Supply chain | License test fails on anything outside MIT/Apache/BSD unless flagged | `tests/test_licenses.py` |
 | T18 | Remote code in the extension | Supply chain | MV3 CSP, no `eval`, no remote scripts, no build step | Manifest review; CSP in `manifest.json` |
 
@@ -115,6 +115,14 @@ flowchart LR
 - **Model swap race outside Windows.** A process with write access to the model folder
   could swap a model in and back between the hash and the second hash on macOS or Linux.
   Such a process could already change the installed packages.
+- **Model path re-pointed on Windows.** The Windows hold does not stop a process running
+  as the same user from re-pointing a junction, or renaming a parent folder, on the path
+  to a model between the hash and the load. The held file stays unchanged, but the loader,
+  which opens the model by path, then reads a different file. Such a process already has
+  the user's rights, and could change the installed packages or the models themselves, so
+  this is a recorded residual risk, not fixed. Closing it would mean loading each model
+  from the bytes that were hashed, which costs about 633 MB of resident memory, as
+  measured.
 - **macOS shortcut binding** needs one manual step: the user assigns the key to the
   installed Quick Action (PLAN §2.1). Until then, clipboard redaction on macOS runs only
   from the CLI.

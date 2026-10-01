@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from redactit import cli, models
+from redactit.detect.registry import PatternTimeout
 from redactit.hosts import clipboard
 from redactit.hosts.clipboard import CF_UNICODETEXT, SKIPPED, ClipboardError, Item, Linux, MacOS, Windows
 
@@ -213,6 +214,20 @@ def test_macos_refuses_to_write_after_the_clipboard_changed():
     assert pasteboard.items == {PLAIN: TEXT}
 
 
+def test_macos_refuses_text_read_after_the_concealment_check_went_stale():
+    pasteboard = FakePasteboard({PLAIN: TEXT})
+    read = pasteboard.stringForType_
+
+    def racing(kind):  # a password manager copies between the check and the read
+        pasteboard.items = {PLAIN: SECRET, "org.nspasteboard.ConcealedType": ""}
+        pasteboard.count += 1
+        return read(kind)
+
+    pasteboard.stringForType_ = racing
+    with pytest.raises(ClipboardError, match="changed while it was read"):
+        MacOS(pasteboard).read()
+
+
 # --- Linux ---------------------------------------------------------------------------------
 
 SESSIONS = {
@@ -276,6 +291,47 @@ def test_linux_refuses_to_write_after_the_clipboard_changed(session):
     with pytest.raises(ClipboardError, match="changed"):
         board.write("Call [PERSON_1].", item.version)
     assert fake.board == {"text/plain;charset=utf-8": b"something newer"}
+
+
+UTF8 = "text/plain;charset=utf-8"
+
+
+@pytest.mark.parametrize("session", SESSIONS)
+@pytest.mark.parametrize("before, after", [
+    ({UTF8: TEXT.encode()}, {UTF8: SECRET.encode(), Linux.HINT: b"secret"}),
+    ({UTF8: TEXT.encode(), Linux.HINT: b"public"}, {UTF8: SECRET.encode(), Linux.HINT: b"secret"}),
+    ({UTF8: TEXT.encode()}, {UTF8: b"copied later", "text/html": b"<b>copied later</b>"}),
+], ids=["now concealed", "same types, now concealed", "other types"])
+def test_linux_refuses_text_read_after_the_concealment_check_went_stale(session, before, after):
+    board, fake = linux(session, before)
+
+    def racing(cmd, **kwargs):  # another owner takes the clipboard as the text is read
+        result = fake(cmd, **kwargs)
+        if cmd[0] in ("wl-paste", "xclip") and "-i" not in cmd and cmd[-1] == UTF8:
+            fake.board = dict(after)
+        return result
+
+    board._run = racing
+    with pytest.raises(ClipboardError, match="changed while it was read"):
+        board.read()
+
+
+def test_a_write_that_fails_after_clearing_leaves_the_clipboard_empty():
+    """Windows and macOS must clear the clipboard before writing to it. If the write then
+    fails, the clipboard is left empty: never holding the unredacted text."""
+    board, fake = windows({CF_UNICODETEXT: utf16(TEXT), "HTML Format": b"<b>Priya</b>"})
+    item = board.read()
+    fake.SetClipboardData = lambda _fmt, _handle: 0
+    with pytest.raises(ClipboardError, match="now empty"):
+        board.write("Call [PERSON_1].", item.version)
+    assert fake.board == {} and fake.ours == set() and not fake.is_open
+    pasteboard = FakePasteboard({PLAIN: TEXT})
+    mac = MacOS(pasteboard)
+    item = mac.read()
+    pasteboard.setString_forType_ = lambda _text, _kind: False
+    with pytest.raises(ClipboardError, match="now empty"):
+        mac.write("Call [PERSON_1].", item.version)
+    assert pasteboard.items == {}
 
 
 def test_linux_without_a_clipboard_tool_fails_with_a_hint():
@@ -347,6 +403,17 @@ def test_a_failing_engine_leaves_the_clipboard_untouched(command, monkeypatch, c
     assert command.written is None
     err = capsys.readouterr().err
     assert "RuntimeError (details withheld" in err and "Priya" not in err and "Okafor" not in err
+
+
+def test_a_detection_timeout_leaves_the_clipboard_untouched(command, monkeypatch, capsys):
+    class TimingOut:
+        def redact(self, *_args, **_kwargs):
+            raise PatternTimeout("a detection pattern timed out; nothing was redacted")
+
+    monkeypatch.setattr(cli, "open_engine", lambda *_args: TimingOut())
+    assert cli.main(["clip"]) == 1
+    assert command.written is None
+    assert capsys.readouterr().err == "error: a detection pattern timed out; nothing was redacted\n"
 
 
 def test_a_clipboard_that_changed_meanwhile_is_left_alone(command, monkeypatch, capsys):

@@ -45,13 +45,17 @@ def effective_policy(path: Path | None = None):
 
 def open_engine(policy: Path | None = None, verified=None):
     """The engine with the user's policy, keychain vault and audit log. `verified` is a
-    `models.verify(...)` the caller started before its imports (see Engine)."""
-    from redactit.audit import AuditLog
-    from redactit.pipeline import Engine
-    from redactit.vault import Vault
+    `models.verify(...)` the caller started before its imports (see Engine); it is
+    released here if the engine cannot be built."""
+    from redactit import models
 
-    paths = _paths()
-    return Engine(effective_policy(policy), Vault.open(paths["vault"]), AuditLog(paths["audit"]), verified=verified)
+    with models.released_on_error(verified):
+        from redactit.audit import AuditLog
+        from redactit.pipeline import Engine
+        from redactit.vault import Vault
+
+        paths = _paths()
+        return Engine(effective_policy(policy), Vault.open(paths["vault"]), AuditLog(paths["audit"]), verified=verified)
 
 
 def output_name(name: str, suffix: str) -> str:
@@ -106,33 +110,63 @@ def _decode(data: bytes) -> str:
 
 def _redact(args: argparse.Namespace) -> int:
     from redactit import models, safety
+    from redactit.types import RedactitError
 
+    inputs =[src for src in args.paths if src.suffix.lower() in SUFFIXES]
+    # Before anything loads or is written: notes.txt or scan.pdf redacted into its own
+    # folder would replace the original.
+    if any(_same_file(args.out / name, src) for name in _expected_outputs(inputs) for src in inputs):
+        raise RedactitError("an output would overwrite an input; choose an --out folder that does not hold the inputs")
     safety.block_network()  # before any detector or model code is imported and run
     pending = models.verify(models.TEXT_MODELS)  # hashes in a thread while the imports below run
-    from redactit.formats import docx, image, pdf  # noqa: F401 - loaded now, while the hash runs
-
+    with models.released_on_error(pending):
+        from redactit.formats import docx, image, pdf  # noqa: F401 - loaded now, while the hash runs
     engine = open_engine(args.policy, pending)
     if any(SUFFIXES.get(src.suffix.lower()) in ("pdf", "image") for src in args.paths):
         engine.warm_images()  # verifies and loads OCR and faces up front, and audits it
     scope = args.scope or uuid.uuid4().hex  # a fresh scope per call unless the caller links runs
     args.out.mkdir(parents=True, exist_ok=True)
-    seen = set()
+    # Output names written so far, in lower case as Windows and macOS compare them. Two
+    # inputs can share an output name: a/notes.md and b/notes.md, or notes.docx and
+    # notes.docx.md (both write notes.docx.md). The later one is skipped, never written over.
+    written: set[str] = set()
     for i, src in enumerate(args.paths, 1):
         kind = SUFFIXES.get(src.suffix.lower())
         if kind is None:
             print(f"skipped {i}/{len(args.paths)}: {src.suffix or 'no extension'} is not supported", file=sys.stderr)
             continue
-        if src.name.lower() in seen:  # a/notes.md and b/notes.md would both write out/notes.md
-            print(f"skipped {i}/{len(args.paths)}: an earlier input has the same name", file=sys.stderr)
+        if {name.lower() for name in _expected_outputs([src])} & written:
+            print(f"skipped {i}/{len(args.paths)}: an earlier input has an output of the same name", file=sys.stderr)
             continue
-        seen.add(src.name.lower())
-        for name, content in redact_file(src.name, src.read_bytes(), engine, scope, site=args.site):
+        outputs = redact_file(src.name, src.read_bytes(), engine, scope, site=args.site)
+        # Checked again by the names actually produced: an image's comes from its decoded format.
+        if {name.lower() for name, _ in outputs} & written:
+            print(f"skipped {i}/{len(args.paths)}: an earlier input has an output of the same name", file=sys.stderr)
+            continue
+        if any(_same_file(args.out / name, other) for name, _ in outputs for other in inputs):
+            print(f"skipped {i}/{len(args.paths)}: its output would overwrite an input", file=sys.stderr)
+            continue
+        written.update(name.lower() for name, _ in outputs)
+        for name, content in outputs:
             if isinstance(content, str):
                 (args.out / name).write_text(content, encoding="utf-8")
             else:
                 (args.out / name).write_bytes(content)
         print(f"redacted {i}/{len(args.paths)}")
     return 0
+
+
+def _expected_outputs(inputs: list[Path]) -> list[str]:
+    """The output names `redact_file` should write for `inputs` (supported suffixes only)."""
+    return [output_name(src.name, s) for src in inputs for s in output_suffixes(src.name)]
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """Whether two paths name one file, however spelled; False if either does not exist."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def _watch(args: argparse.Namespace) -> int:
@@ -145,8 +179,8 @@ def _watch(args: argparse.Namespace) -> int:
     try:
         safety.block_network()
         pending = models.verify(models.TEXT_MODELS)
-        from redactit.formats import docx, image, pdf  # noqa: F401 - loaded now, while the hash runs
-
+        with models.released_on_error(pending):
+            from redactit.formats import docx, image, pdf  # noqa: F401 - loaded now, while the hash runs
         engine = open_engine(args.policy, pending)  # one engine for the whole run: the cold start is paid once
         engine.warm_text()
         engine.warm_images()  # now, so the first PDF or image dropped does not wait for OCR to load
@@ -211,7 +245,8 @@ def main(argv: list[str] | None = None) -> int:
 
     clip = sub.add_parser("clip", help="redact the clipboard's text in place, once (an OS shortcut runs this)",
                           epilog="exit status: 0 written back, 3 nothing to redact (no text, or concealed), "
-                                 "1 failed; unless 0, the clipboard is untouched")
+                                 "1 failed; unless 0, the clipboard is untouched, except that a write "
+                                 "failing after the clear (Windows, macOS) leaves it empty")
     clip.add_argument("--policy", type=Path, help="policy file (default: user policy if present)")
     clip.add_argument("--scope", help="reuse pseudonyms across runs that share this name")
     clip.set_defaults(run=_clip)
