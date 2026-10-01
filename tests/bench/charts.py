@@ -1,6 +1,7 @@
 """Charts for the timing report: SVG files that follow the viewer's light or dark theme.
 
     py -3.12 -m uv run python tests/bench/charts.py docs/perf/phase-3-timing.json docs/perf
+    py -3.12 -m uv run python tests/bench/charts.py docs/perf/phase-4/timing.json docs/perf/phase-4 docs/perf/phase-4/compare.json
 
 Hand-written SVG, so the report needs no plotting library (and no new license to vet).
 Colours are the categorical slots of a colour-blind-checked palette, in its fixed order.
@@ -317,7 +318,7 @@ def _log_axis(svg: Svg, left: float, right: float, top: float, bottom: float, lo
     x = lambda s: left + (math.log10(s) - math.log10(lo)) / (math.log10(hi) - math.log10(lo)) * (right - left)  # noqa: E731
     for a, b, fill in ((lo, 1, "band"), (1, 10, "band2"), (10, hi, "band")):
         svg.add(f'<rect x="{x(a):.1f}" y="{top}" width="{x(b) - x(a):.1f}" height="{bottom - top}" fill="var(--{fill})"/>')
-    for t, label in ((0.3, "0.3 s"), (1, "1 s"), (3, "3 s"), (10, "10 s"), (30, "30 s")):
+    for t, label in ((0.1, "0.1 s"), (0.3, "0.3 s"), (1, "1 s"), (3, "3 s"), (10, "10 s"), (30, "30 s"), (100, "100 s")):
         if lo <= t <= hi:
             svg.line(x(t), top, x(t), bottom, "grid")
             svg.text(x(t), bottom + 16, label, "m", "middle")
@@ -329,10 +330,14 @@ def impact(plan: dict, out: Path) -> None:
     rows = plan["impact"]
     top, row_h, left, right = 84, 30, 250, W - 190
     height = top + len(rows) * row_h + 40
-    svg = Svg(height, "What the proposed decisions change", "Time today and with the decision, per case.")
-    svg.text(20, 30, "What the proposed decisions change", "h")
-    svg.text(20, 50, "Ring: today. Dot: with the decision. Log scale; the tag says whether it was measured", "sub")
-    x = _log_axis(svg, left, right, top - 8, top + len(rows) * row_h, 0.3, 20)
+    title = plan.get("title", "What the proposed decisions change")
+    svg = Svg(height, title, "Time before and after, per case.")
+    svg.text(20, 30, title, "h")
+    svg.text(20, 50, plan.get("subtitle", "Ring: today. Dot: with the decision. Log scale; the tag says whether it was "
+                                           "measured"), "sub")
+    lo = min(0.3, 0.8 * min(r["after_s"] for r in rows))
+    hi = max(20.0, 1.25 * max(r["before_s"] for r in rows))
+    x = _log_axis(svg, left, right, top - 8, top + len(rows) * row_h, lo, hi)
     for i, r in enumerate(rows):
         cy = top + i * row_h + row_h / 2 - 4
         svg.text(20, cy + 4, r["label"])
@@ -375,11 +380,13 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     for chart in (speed, stages, cold_start, scaling, sizes):
         chart(report, out)
-    plan = Path(sys.argv[1]).with_name("speed-plan.json")
+    # The before/after comparison: a third argument, or speed-plan.json beside the results.
+    plan = Path(sys.argv[3]) if len(sys.argv) > 3 else Path(sys.argv[1]).with_name("speed-plan.json")
     if plan.exists():  # the proposed decisions and the device comparison, when written
         data = json.loads(plan.read_text(encoding="utf-8"))
         impact(data, out)
-        devices(data, out)
+        if "devices" in data:
+            devices(data, out)
     print(sorted(p.name for p in out.glob("*.svg")))
 
 
