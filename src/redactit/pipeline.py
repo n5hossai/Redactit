@@ -21,8 +21,17 @@ class Result:
     replacements: list[str]  # what each decision became, e.g. "[PERSON_1]" or "****"
 
 
+# Synthetic warm-up input: no real person, and it never reaches the vault or the audit log.
+WARM_TEXT = "Warm-up: Jane Roe lives at 12 Elm Street, Springfield, and pays with 4111 1111 1111 1111."
+WARM_IMAGE_TEXT = "Warm-up 123"
+
+
 class Engine:
-    """Loads the analyzer and model once (seconds), then redacts many texts (milliseconds)."""
+    """Loads the analyzer and model once (seconds), then redacts many texts (milliseconds).
+
+    Loading comes in two stages so a host can answer pastes before images: construction
+    (plus `warm_text`) readies text, and `warm_images` then loads OCR and face detection.
+    """
 
     def __init__(self, policy: Policy, vault: Vault, audit: AuditLog | None = None, *,
                  verified: models.Verification | None = None):
@@ -42,6 +51,27 @@ class Engine:
                         entity_count=len(policy.entities), locked_count=sum(e.locked for e in policy.entities.values()))
             self._audit_verified(models.TEXT_MODELS)
             audit.write("vault_purge", purged_count=purged, retention_days=policy.vault.retention_days)
+
+    def warm_text(self) -> None:
+        """Run both detectors once: the first call pays one-off allocations (about half a second)."""
+        self.detector.detect(WARM_TEXT)
+        self.ner.detect(WARM_TEXT)
+
+    def warm_images(self) -> None:
+        """Verify and load the OCR and face models and run each once, so the first image
+        does not pay for it. Calls the detectors directly: nothing reaches the vault or audit."""
+        from PIL import Image, ImageDraw, ImageFont
+
+        from redactit import ocr
+        from redactit.formats import image
+
+        img = Image.new("RGB", (320, 80), "white")
+        ImageDraw.Draw(img).text((10, 20), WARM_IMAGE_TEXT, fill="black", font=ImageFont.load_default(size=24))
+        ocr.read_lines(img)  # the first read builds RapidOCR from verified files
+        image._faces(img)  # verifies YuNet on every call
+        image._barcodes(img)
+        if self.audit:
+            self._audit_verified((*models.OCR_MODELS, image.YUNET))
 
     def _audit_verified(self, names) -> None:
         for name in names:  # each was verified before its session was built, so the event is true

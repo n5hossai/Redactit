@@ -33,3 +33,20 @@ def test_hidden_characters_do_not_hide_values(engine):
 def test_startup_is_audited_without_values(engine):
     events = [json.loads(line)["event"] for line in engine[1].read_text(encoding="utf-8").splitlines()]
     assert events[:3] == ["engine_start", "policy_loaded", "model_verified"] and "vault_purge" in events
+
+
+def test_warming_up_records_only_the_models_it_verified(engine):
+    """Warm-up runs the detectors on synthetic input: no vault entry, no redaction event."""
+    eng, audit = engine
+    rows = lambda: eng.vault._conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]  # noqa: E731
+    before, logged = rows(), len(audit.read_text(encoding="utf-8").splitlines())
+    eng.warm_text()
+    eng.warm_images()
+    new = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()[logged:]]
+    assert rows() == before
+    assert [(e["event"], e["model"], e["source"]) for e in new] == [
+        ("model_verified", "rapidocr.det.onnx", "package"),
+        ("model_verified", "rapidocr.cls.onnx", "package"),
+        ("model_verified", "rapidocr.rec.onnx", "package"),
+        ("model_verified", "yunet.face_detection_yunet_2023mar.onnx", "download"),
+    ]

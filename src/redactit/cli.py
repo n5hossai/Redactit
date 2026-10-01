@@ -48,6 +48,8 @@ def _redact(args: argparse.Namespace) -> int:
         managed = None
     engine = Engine(load_policy(user_policy, managed), Vault.open(paths["vault"]), AuditLog(paths["audit"]),
                     verified=pending)
+    if any(SUFFIXES.get(src.suffix.lower()) in ("pdf", "image") for src in args.paths):
+        engine.warm_images()  # verifies and loads OCR and faces up front, and audits it
     scope = args.scope or uuid.uuid4().hex  # a fresh scope per call unless the caller links runs
     args.out.mkdir(parents=True, exist_ok=True)
     seen = set()
