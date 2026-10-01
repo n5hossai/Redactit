@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes
 import io
+from typing import Callable
 
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
@@ -29,8 +30,12 @@ class PdfError(RedactitError, ValueError):
     pass
 
 
-def redact_pdf(data: bytes, engine, scope: str, *, destination: str = "cli") -> tuple[bytes, str]:
-    """(image-only PDF bytes, redacted Markdown of the text visible on each page)."""
+def redact_pdf(data: bytes, engine, scope: str, *, destination: str = "cli",
+               progress: Callable[[int, int], None] | None = None) -> tuple[bytes, str]:
+    """(image-only PDF bytes, redacted Markdown of the text visible on each page).
+
+    `progress(page, pages)` runs before each page; an exception from it stops the job.
+    """
     try:
         pdf = pdfium.PdfDocument(data)
     except pdfium.PdfiumError as e:
@@ -39,6 +44,8 @@ def redact_pdf(data: bytes, engine, scope: str, *, destination: str = "cli") -> 
         raise PdfError(f"refusing a PDF with more than {MAX_PAGES} pages")
     out, markdown = pdfium.PdfDocument.new(), []
     for number, page in enumerate(pdf, 1):
+        if progress:
+            progress(number, len(pdf))
         width, height = page.get_size()  # points, after the page's own rotation
         scale = DPI / 72
         if width * height * scale * scale > MAX_PAGE_PIXELS:

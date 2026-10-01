@@ -167,7 +167,8 @@ def _faces(rgb: Image.Image) -> list[Box]:
     # Built per call, not cached: its buffers grow with the input and a 50 MP photo would keep gigabytes.
     scale = min(1.0, FACE_MAX_SIDE / max(rgb.size))
     small = rgb if scale == 1 else rgb.resize((round(rgb.width * scale), round(rgb.height * scale)))
-    detector = cv2.FaceDetectorYN.create(str(models.path_for(YUNET)), "", small.size, FACE_SCORE)
+    with models.verify([YUNET]) as paths:  # held unchanged until OpenCV has read it (T15)
+        detector = cv2.FaceDetectorYN.create(str(paths[YUNET]), "", small.size, FACE_SCORE)
     _, faces = detector.detect(np.ascontiguousarray(np.asarray(small)[..., ::-1]))  # OpenCV expects BGR
     return [Box(_rect(x / scale, y / scale, w / scale, h / scale), None) for x, y, w, h, *_ in
             (faces if faces is not None else [])]

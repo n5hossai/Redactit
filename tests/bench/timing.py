@@ -266,7 +266,7 @@ def memory_mb() -> tuple[float | None, float]:
     return None, peak / (2**20 if sys.platform == "darwin" else 2**10)
 
 
-def _engine(tmp: Path):
+def _engine(tmp: Path, verified=None):
     import yaml
     from redactit.audit import AuditLog
     from redactit.pipeline import Engine
@@ -276,7 +276,7 @@ def _engine(tmp: Path):
     policy = yaml.safe_load(DEFAULT_POLICY.read_text(encoding="utf-8"))  # the defaults, at dial 3
     (tmp / "policy.yaml").write_text(yaml.safe_dump(policy), encoding="utf-8")
     vault = Vault(tmp / "vault.db", os.urandom(32))  # a throwaway key: never the real keychain
-    return Engine(load_policy(tmp / "policy.yaml"), vault, AuditLog(tmp / "audit.jsonl"))
+    return Engine(load_policy(tmp / "policy.yaml"), vault, AuditLog(tmp / "audit.jsonl"), verified=verified)
 
 
 def run_scenario(scenario: str, repeats: int) -> dict:
@@ -346,16 +346,21 @@ def run_scenario(scenario: str, repeats: int) -> dict:
 def run_cold() -> dict:
     """Imports and engine load in this fresh process, by stage."""
     marks = {"process_start": time.perf_counter()}
-    from redactit import models, pipeline  # noqa: F401 (the import cost is what is measured)
+    from redactit import models
+
+    pending = models.verify(models.TEXT_MODELS)  # as the interfaces do: hashed while the imports run
+    from redactit import pipeline  # noqa: F401 (the import cost is what is measured)
 
     marks["imported"] = time.perf_counter()
     stages = Stages()
-    stages.wrap(models, "path_for", "Model hash check")
+    # What the hash still costs after the imports, plus the second hash where files cannot be held.
+    stages.wrap(models.Verification, "__enter__", "Model hash check")
+    stages.wrap(models.Verification, "__exit__", "Model hash check")
     stages.wrap(pipeline, "Detector", "Presidio and spaCy load")
     stages.wrap(pipeline, "GlinerNer", "Name model load")
     with tempfile.TemporaryDirectory() as tmp:
         start = time.perf_counter()
-        engine = _engine(Path(tmp))
+        engine = _engine(Path(tmp), pending)
         load = time.perf_counter() - start
         engine.vault.close()  # Windows cannot delete an open file
     out = {"Imports": marks["imported"] - marks["process_start"], **stages.take()}

@@ -78,7 +78,7 @@ Runtime dependencies must be MIT, Apache-2.0 or BSD. Exceptions are listed in se
 | Validators, secrets | In-house (Luhn, IBAN mod-97, SIN, SSN, NINO, key formats) | n/a | Each is under 20 lines. `python-stdnum` is LGPL, so it is excluded. |
 | PDF | `pypdfium2` | Apache-2.0 / BSD-3 | Text with character boxes plus page rendering. PyMuPDF is AGPL, so it is excluded. |
 | PDF rebuild | `pypdfium2`: a new document of JPEG page images | Apache-2.0 / BSD-3 | Writes raster pages only, never a text layer. `img2pdf` is LGPL, so it is excluded. |
-| OCR | RapidOCR on `onnxruntime` | Apache-2.0 / MIT | Installs with pip, word boxes, ONNX files can be pinned. |
+| OCR | RapidOCR on `onnxruntime` | Apache-2.0 / MIT | Installs with pip, word boxes; its bundled ONNX files are pinned by SHA-256. |
 | Faces | OpenCV YuNet (`opencv-python-headless`) | Apache-2.0 | Small, CPU-fast, returns boxes. |
 | QR / barcodes | `zxing-cpp` | Apache-2.0 | Detects and locates many symbologies. `pyzbar` needs `zbar` (LGPL). |
 | DOCX | `zipfile` + `defusedxml` walk of the OOXML parts | PSF (flagged) | Blocks XML entity attacks. `python-docx` does not expose comments or tracked changes well. |
@@ -124,10 +124,10 @@ was rejected: it scored 4 of 15 synthetic addresses below the default threshold.
 Redactit/
 ├─ pyproject.toml            # deps, entry point `redactit`
 ├─ uv.lock
-├─ src/redactit/models.lock.json  # model URL (pinned revision) and SHA-256
+├─ src/redactit/models.lock.json  # SHA-256 per model: URL at a pinned revision, or file inside a package
 ├─ src/redactit/policy.default.yaml  # annotated default policy, the base layer
 ├─ src/redactit/
-│  ├─ cli.py                 # redact, verify, clip, watch, setup-models
+│  ├─ cli.py                 # redact, verify, clip, watch, setup-models, host
 │  ├─ types.py               # Segment, Span, Decision
 │  ├─ pipeline.py            # extract -> detect -> decide -> apply -> render
 │  ├─ policy.py              # schema, managed + user layering, dial thresholds
@@ -136,7 +136,7 @@ Redactit/
 │  ├─ audit.py               # JSONL writer, sanitised reasons only
 │  ├─ safety.py              # blocks IP sockets and DNS inside the engine
 │  ├─ managed.py             # OS-derived admin policy path, admin-ownership check
-│  ├─ models.py              # load-time SHA-256 verification
+│  ├─ models.py              # load-time SHA-256 verification, files held until loaded
 │  ├─ detect/
 │  │  ├─ patterns.py         # regexes + validators (Luhn, IBAN, SIN, SSN, NINO)
 │  │  ├─ secrets.py          # API key and token formats, PEM blocks, JWTs
@@ -149,7 +149,7 @@ Redactit/
 │  │  └─ image.py            # OCR + faces + codes, fill, re-encode
 │  ├─ ocr.py                 # RapidOCR wrapper shared by pdf and image
 │  └─ hosts/
-│     ├─ native.py           # native messaging framing and chunking
+│     ├─ native.py           # native messaging: framing, chunking, queue, warm-up, origin check
 │     ├─ watcher.py          # inbox -> outbox
 │     └─ clipboard.py        # read, skip concealed, redact, write back
 ├─ extension/
@@ -168,6 +168,7 @@ Redactit/
 │  ├─ leak/run.py            # re-extract, re-OCR, score, write report
 │  ├─ unit/                  # per module
 │  ├─ test_offline.py        # engine run with sockets disabled
+│  ├─ test_host.py           # native host round trips in Chrome's frames (hostkit.py starts it)
 │  ├─ test_licenses.py       # fails on any non-permissive dependency
 │  └─ test_leak_harness.py   # harness must see every value on unredacted input
 ├─ docs/
@@ -231,7 +232,27 @@ are committed.
   port usually keeps it alive, but not reliably in every Chrome build.
 - Chunking: Chrome caps host-to-extension messages at 1 MB and extension-to-host messages
   at 64 MiB. Both directions use the same numbered-frame protocol (frames of 512 KiB),
-  so one code path covers both.
+  so one code path covers both. The protocol is specified in `hosts/native.py`:
+  - a payload travels as base64 chunks of 384 KiB (512 KiB of base64), numbered from 0,
+    with a total that must follow from the declared size;
+  - a strict schema: unknown types or fields are refused, and errors carry a stable code
+    and never the input;
+  - caps: 64 MiB per paste or file (Chrome's own per-message cap the other way; pastes get
+    no smaller cap), 16 requests and 128 MiB in flight;
+  - requests queue in arrival order, report progress (page N of M for PDFs), and can be
+    cancelled.
+- Warm host (speed plan decision 1): the host announces `warming`, then `ready-text` once
+  text detection loads (OCR keeps warming in the background), then `ready-all`. A request
+  that arrives while warming waits; it is never dropped. The host exits after 30 idle
+  minutes and checks the caller's origin against its installed manifest.
+- Host launch (built in Phase 7): the manifest's `path` is a small launcher the installer
+  writes. It starts the base interpreter directly, because the venv's launcher costs 1.37 s
+  against 0.3-1.1 s for base Python:
+  `<base python> -I -S -c "import site, sys; site.addsitedir(r'<venv site-packages>');
+  from redactit.hosts.native import main; main()" --manifest <installed manifest> <args>`,
+  as a `.cmd` file on Windows and a `/bin/sh` script elsewhere. `-I` ignores `PYTHON*`
+  variables and the user site; `-S` keeps the base interpreter's own packages off the path,
+  so only the venv's pinned packages load. `tests/test_host.py` starts the host this way.
 - Review UX: `chrome.sidePanel.open()` only works synchronously inside a user gesture in
   extension code (Chrome 116+). When a paste needs review, the send is held and an
   in-page notice asks the user to click the Redactit toolbar button, which opens the panel
@@ -247,8 +268,12 @@ are committed.
 - Temporary files go in a private directory (`0700` on POSIX, user-only ACL on Windows),
   deleted in `finally`. In-memory processing is the default.
 - Models are downloaded once by `redactit setup-models`, pinned by SHA-256, and verified at
-  every load. At runtime the engine blocks every non-Unix socket and every DNS lookup in
-  its own process, so no dependency can phone home.
+  every load, with no hash cache. RapidOCR's three ONNX files ship inside its package and
+  are pinned too; setup checks them and never downloads them. The hash runs in a thread
+  while the imports do. Until a model is loaded, Windows holds it open against writes,
+  renames and deletes; elsewhere it is hashed again after loading and refused if it
+  changed. At runtime the engine blocks every non-Unix socket and every DNS lookup in its
+  own process, so no dependency can phone home.
 - CI runs a license check that fails on anything outside MIT, Apache or BSD unless it is
   listed here.
 - Synthetic data only. Real documents are never committed.

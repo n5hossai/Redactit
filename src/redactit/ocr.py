@@ -41,24 +41,28 @@ class Line:
 @cache
 def _engine():
     import onnxruntime as ort
+    from redactit import models
+
+    pending = models.verify(models.OCR_MODELS)  # hashes while OpenCV and RapidOCR import
     from rapidocr_onnxruntime import RapidOCR
 
-    engine = RapidOCR(max_side_len=MAX_SIDE)
-    # RapidOCR builds its sessions with onnxruntime's memory arena off, so every buffer for an
-    # image size not seen before came fresh from the OS: a new 720p screenshot took 5.9 s
-    # against 3.6 s for the same one again. The arena is fixed when a session is built, so the
-    # detector and recognizer are rebuilt from the files RapidOCR loaded (the angle classifier
-    # never runs: use_cls=False). _trim() hands the arena's memory back after each image.
-    for owner, name in ((engine.text_det, "infer"), (engine.text_rec, "session")):
-        wrapper = getattr(owner, name)
-        options = ort.SessionOptions()
-        options.log_severity_level = 4  # errors only, as RapidOCR sets it
-        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        options.enable_cpu_mem_arena = True
-        options.intra_op_num_threads = physical_cores()  # the same choice as the name model (cores.py)
-        wrapper.session = ort.InferenceSession(
-            wrapper.session._model_path, options,  # onnxruntime keeps the path it loaded
-            providers=[("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"})])
+    # Explicit paths, held unchanged until the sessions have read them (THREAT_MODEL T15).
+    with pending as paths:
+        engine = RapidOCR(max_side_len=MAX_SIDE, det_model_path=str(paths["rapidocr/det.onnx"]),
+                          cls_model_path=str(paths["rapidocr/cls.onnx"]), rec_model_path=str(paths["rapidocr/rec.onnx"]))
+        # RapidOCR builds its sessions with onnxruntime's memory arena off, so every buffer for
+        # an image size not seen before came fresh from the OS: a new 720p screenshot took 5.9 s
+        # against 3.6 s for the same one again. The arena is fixed when a session is built, so
+        # the detector and recognizer are rebuilt from the same held files (the angle classifier
+        # never runs: use_cls=False). _trim() hands the arena's memory back after each image.
+        for wrapper, name in ((engine.text_det.infer, "rapidocr/det.onnx"), (engine.text_rec.session, "rapidocr/rec.onnx")):
+            options = ort.SessionOptions()
+            options.log_severity_level = 4  # errors only, as RapidOCR sets it
+            options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            options.enable_cpu_mem_arena = True
+            options.intra_op_num_threads = physical_cores()  # the same choice as the name model (cores.py)
+            wrapper.session = ort.InferenceSession(
+                str(paths[name]), options, providers=[("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"})])
     return engine
 
 

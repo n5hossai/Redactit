@@ -1,4 +1,4 @@
-"""Command-line interface: `redactit redact`, `redactit setup-models`."""
+"""Command-line interface: `redactit redact`, `redactit setup-models`, `redactit host`."""
 
 import argparse
 import os
@@ -9,6 +9,7 @@ from pathlib import Path
 import platformdirs
 
 from redactit import __version__
+from redactit.hosts import native
 
 SUFFIXES = {".txt": "text", ".md": "text", ".docx": "docx", ".pdf": "pdf",
             ".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image"}
@@ -25,27 +26,45 @@ def _paths() -> dict[str, Path]:
     }
 
 
-def _redact(args: argparse.Namespace) -> int:
-    from redactit import safety
-
-    safety.block_network()  # before any detector or model code is imported and run
-    from redactit.audit import AuditLog
-    from redactit.formats.docx import docx_to_markdown
-    from redactit.formats.image import redact_image
-    from redactit.formats.pdf import redact_pdf
+def effective_policy(path: Path | None = None):
+    """The defaults, the admin's managed policy (refused unless admin-owned), then the user's
+    policy file (or `path`), as every interface applies them."""
     from redactit.managed import assert_admin_owned, managed_policy_path
-    from redactit.pipeline import Engine
     from redactit.policy import load_policy
-    from redactit.vault import Vault
 
-    paths = _paths()
-    user_policy = args.policy or (paths["policy"] if paths["policy"].is_file() else None)
+    default = _paths()["policy"]
+    user_policy = path or (default if default.is_file() else None)
     managed = managed_policy_path()
     if managed.is_file():
         assert_admin_owned(managed)
     else:
         managed = None
-    engine = Engine(load_policy(user_policy, managed), Vault.open(paths["vault"]), AuditLog(paths["audit"]))
+    return load_policy(user_policy, managed)
+
+
+def open_engine(policy: Path | None = None, verified=None):
+    """The engine with the user's policy, keychain vault and audit log. `verified` is a
+    `models.verify(...)` the caller started before its imports (see Engine)."""
+    from redactit.audit import AuditLog
+    from redactit.pipeline import Engine
+    from redactit.vault import Vault
+
+    paths = _paths()
+    return Engine(effective_policy(policy), Vault.open(paths["vault"]), AuditLog(paths["audit"]), verified=verified)
+
+
+def _redact(args: argparse.Namespace) -> int:
+    from redactit import models, safety
+
+    safety.block_network()  # before any detector or model code is imported and run
+    pending = models.verify(models.TEXT_MODELS)  # hashes in a thread while the imports below run
+    from redactit.formats.docx import docx_to_markdown
+    from redactit.formats.image import redact_image
+    from redactit.formats.pdf import redact_pdf
+
+    engine = open_engine(args.policy, pending)
+    if any(SUFFIXES.get(src.suffix.lower()) in ("pdf", "image") for src in args.paths):
+        engine.warm_images()  # verifies and loads OCR and faces up front, and audits it
     scope = args.scope or uuid.uuid4().hex  # a fresh scope per call unless the caller links runs
     args.out.mkdir(parents=True, exist_ok=True)
     seen = set()
@@ -81,8 +100,14 @@ def _setup_models(_args: argparse.Namespace) -> int:
     from redactit import models
 
     fetched = models.fetch_all()
-    print(f"models ready ({len(fetched)} downloaded, {len(models.LOCK) - len(fetched)} already present)")
+    bundled = models.check_bundled()  # shipped inside packages: checked, never downloaded
+    present = len(models.LOCK) - len(fetched) - len(bundled)
+    print(f"models ready ({len(fetched)} downloaded, {present} already present, {len(bundled)} bundled and verified)")
     return 0
+
+
+def _host(args: argparse.Namespace) -> int:
+    return native.serve(args)  # ends the process itself
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -100,6 +125,10 @@ def main(argv: list[str] | None = None) -> int:
 
     setup = sub.add_parser("setup-models", help="download and verify the pinned models (needs network once)")
     setup.set_defaults(run=_setup_models)
+
+    host = sub.add_parser("host", help="serve the browser extension over Chrome native messaging (Chrome starts this)")
+    native.add_arguments(host)
+    host.set_defaults(run=_host)
 
     args = parser.parse_args(argv)
     if args.version:
