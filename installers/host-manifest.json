@@ -1,0 +1,9 @@
+{
+  "name": "com.redactit.host",
+  "description": "Redactit: redacts sensitive data on this computer before it reaches an AI chat site",
+  "path": "REDACTIT_HOST_LAUNCHER",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://REDACTIT_EXTENSION_ID/"
+  ]
+}
