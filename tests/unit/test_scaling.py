@@ -136,6 +136,7 @@ def test_the_address_rules_take_a_second_or_less_on_a_200_kb_paste(prose):
 
 def test_the_pattern_stage_grows_with_the_text_not_its_square(det, prose):
     # 200 KB against 20 KB: 10x if linear (fixed costs make it less), 23x before the fixes.
+    # The bound is 16x: a macOS CI runner measured 12.4-12.8x, and 23x must still fail.
     # The 20 KB time is the mean over the ten 20 KB pieces of the same paste, timed right
     # after the whole paste, so a busy machine slows both sides of a ratio alike; the best
     # of three ratios is kept, since a quadratic cost would show in all three.
@@ -143,7 +144,7 @@ def test_the_pattern_stage_grows_with_the_text_not_its_square(det, prose):
     pieces = [text[i:i + 20_000] for i in range(0, len(text), 20_000)]
     ratios = [_best(lambda: det.detect(text), 1) / (_best(lambda: [det.detect(p) for p in pieces], 1) / len(pieces))
               for _ in range(3)]
-    assert min(ratios) <= 12, ratios
+    assert min(ratios) <= 16, ratios
 
 
 def test_digit_and_comma_runs_take_bounded_time(det):
