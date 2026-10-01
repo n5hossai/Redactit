@@ -211,10 +211,10 @@ def test_a_span_over_two_lines_gets_a_box_on_each(monkeypatch):
     span = Span(text.index("Priya"), text.index(" today"), "PERSON", 0.9, "test")
     decision = Decision(span, "pseudonymize", "entities.PERSON", "test")
     engine = SimpleNamespace(
-        policy=SimpleNamespace(entities={}), audit=None,
+        policy=SimpleNamespace(entities={}, effective_dial=lambda: 3), audit=None,
         redact=lambda t, scope, **kw: Result("", [decision], ["[PERSON_1]"]),
     )
-    monkeypatch.setattr(ocr, "read_lines", lambda img: lines)
+    monkeypatch.setattr(ocr, "read_lines", lambda img, dial: lines)
     boxes, _ = find_boxes(Image.new("RGB", (200, 100)), engine, "t")
     assert boxes == [
         Box(ocr.char_quad(lines[0], 8, 13), "[PERSON_1]"),

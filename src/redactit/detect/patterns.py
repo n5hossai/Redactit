@@ -232,8 +232,53 @@ _TAIL = _UNIT_AFTER + r"(?:,[^\S\n]*[^,\n.;:!?]{2,40}){0,4}"
 # break): a new line that starts a new word, like "Card: ...", must not join the address.
 # A full stop ends a part only before a space or line end, so "Apt.044" (OCR) stays inside.
 _CHAR = r"(?:[^,\n.;:!?|]|\.(?=\S))"
-_PART = rf"{_CHAR}{{0,40}}(?:(?:(?<=[A-Za-z])\r?\n(?=[a-z])|-\r?\n){_CHAR}{{0,40}})?"
+_PART_CHARS = 40  # characters in a part, on each side of a line break
+_PART = rf"{_CHAR}{{0,{_PART_CHARS}}}(?:(?:(?<=[A-Za-z])\r?\n(?=[a-z])|-\r?\n){_CHAR}{{0,{_PART_CHARS}}})?"
+_PART_MAX = 2 * _PART_CHARS + 3  # the longest part: two runs joined by "-\r\n"
+_PARTS_MAX = 4  # parts in any rule below, each followed by at most a comma and one run of spaces
 _BEFORE = rf"(?:{_PART},\s*){{0,3}}(?:{_PART}[^\S\n]?)?"  # OCR may glue the last part on ("SKR3P1B2")
+_SPACES = re.compile(r"\s+")
+
+
+class AnchoredPattern(Pattern):
+    """`before + core`, searched only near where `core` occurs, with the matches finditer gives.
+
+    The postcode and ZIP rules start with up to four free-text parts, so the regex engine
+    tried them at every character and backtracked through each 40-character run: 7 s of
+    a 200 KB paste with no address in it. Every match ends its parts where its core matches,
+    and the parts are at most _PARTS_MAX x (_PART_MAX + a comma + the text's longest run of
+    spaces) long. So only starts that close to a core are tried, left to right and resuming
+    after each match as finditer does, with the full pattern, and the matches are the same.
+    """
+
+    def __init__(self, name: str, before: str, core: str, score: float, flags: int) -> None:
+        super().__init__(name, before + core, score)
+        # Presidio reuses a compiled pattern when the recognizer's flags match these.
+        self.compiled_regex, self.compiled_with_flags = _Anchored(before + core, core, flags), flags
+
+
+class _Anchored:
+    def __init__(self, full: str, core: str, flags: int) -> None:
+        self.full, self.core = re.compile(full, flags), re.compile(f"(?={core})", flags)
+
+    def finditer(self, text: str, timeout=None):
+        """Matches of the full pattern, as `full.finditer(text)` returns them. No timeout: Presidio
+        skips a pattern whose search times out, which would let an address through."""
+        cores = [m.start() for m in self.core.finditer(text)]  # every position a core matches at
+        if not cores:
+            return
+        spaces = max((len(m.group()) for m in _SPACES.finditer(text)), default=0)
+        reach = _PARTS_MAX * (_PART_MAX + 1 + spaces)
+        pos = 0  # where finditer would resume
+        for core in cores:
+            pos = max(pos, core - reach)
+            while pos <= core:
+                match = self.full.match(text, pos)  # lookbehinds still see the text before pos
+                if match:
+                    yield match
+                    pos = max(match.end(), pos + 1)
+                else:
+                    pos += 1
 _D4 = r"\d(?:\s*\d){3}"  # four digits, possibly broken by a line wrap
 # US states, DC, territories and military "states", with the letters OCR confuses them with
 # ("VI" read as "Vl"): the ZIP rule below must still fire on a misread code.
@@ -257,9 +302,12 @@ ADDRESS = _recognizer("ADDRESS", [
     # A postcode locates a person to a street in the UK and Canada, so it is redacted with
     # up to three comma-separated parts before it (building, street, town) on its line.
     # Digit lookarounds, not \b: OCR glues the province or town to the code ("SKR3P1B2").
-    Pattern("UK postcode", _BEFORE + r"(?<!\d)[A-Z]{1,2}\d[A-Z\d]?\s*\d[ABD-HJLNP-UW-Z]{2}(?![a-z0-9])", 0.55),
-    Pattern("CA postal code", _BEFORE + r"(?<!\d)[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\s?\d[ABCEGHJ-NPRSTV-Z]\d(?!\d)", 0.55),
+    AnchoredPattern("UK postcode", _BEFORE, r"(?<!\d)[A-Z]{1,2}\d[A-Z\d]?\s*\d[ABD-HJLNP-UW-Z]{2}(?![a-z0-9])",
+                    0.55, re.MULTILINE),
+    AnchoredPattern("CA postal code", _BEFORE,
+                    r"(?<!\d)[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\s?\d[ABCEGHJ-NPRSTV-Z]\d(?!\d)", 0.55, re.MULTILINE),
     # A US ZIP alone covers thousands of people, so the rule needs "town, ST 12345" after at
     # least one comma-separated part; the street line in front of it is taken too.
-    Pattern("US state and ZIP", rf"(?:{_PART},\s*){{1,3}}(?<![A-Za-z])(?:{_US_STATE})\s*\d{{5}}(?:-\d{{4}})?(?!\d)", 0.55),
+    AnchoredPattern("US state and ZIP", rf"(?:{_PART},\s*){{1,3}}",
+                    rf"(?<![A-Za-z])(?:{_US_STATE})\s*\d{{5}}(?:-\d{{4}})?(?!\d)", 0.55, re.MULTILINE),
 ])

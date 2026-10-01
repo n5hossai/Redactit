@@ -126,7 +126,7 @@ Runtime dependencies must be MIT, Apache-2.0 or BSD. Exceptions are listed in se
 | Language | Python 3.12, `uv` for envs | PSF / MIT | Required by the brief; `uv` gives a lockfile. |
 | Detection framework | Presidio analyzer + anonymizer | MIT | Recognizer registry, context scoring and operators already exist. |
 | NER | GLiNER with a PII-tuned checkpoint | Apache-2.0 (package) | See 3.1. |
-| NLP engine for Presidio | spaCy `en_core_web_sm` | MIT | Tokenisation only; GLiNER does the entity work. |
+| NLP engine for Presidio | spaCy `en_core_web_sm` | MIT | Tokens and lemmas only, through Presidio's slim engine (no parser, no spaCy NER, never downloads); GLiNER does the entity work. |
 | Validators, secrets | In-house (Luhn, IBAN mod-97, SIN, SSN, NINO, key formats) | n/a | Each is under 20 lines. `python-stdnum` is LGPL, so it is excluded. |
 | PDF | `pypdfium2` | Apache-2.0 / BSD-3 | Text with character boxes plus page rendering. PyMuPDF is AGPL, so it is excluded. |
 | PDF rebuild | `pypdfium2`: a new document of JPEG page images | Apache-2.0 / BSD-3 | Writes raster pages only, never a text layer. `img2pdf` is LGPL, so it is excluded. |
@@ -364,7 +364,9 @@ linked into Redactit.
    values recorded in a manifest. It includes hard cases: values split across lines, cards
    with spaces or dashes, PII in DOCX headers, comments and deleted revisions, text inside
    images embedded in PDFs, rotated and cropped PDF pages, low-contrast and rotated text,
-   small text in a 4K screenshot, faces, and QR codes that encode PII.
+   small text in a 4K screenshot, faces, and QR codes that encode PII. Every corpus also
+   holds 48 rotated stress pages (one value at 90, 180 or 270 degrees, 14-32 px, black or
+   grey) and a scanned page whose only text runs sideways, which probe the OCR gate.
 2. Redact the corpus at the admin floor and at the tightest dial.
 3. Verify each output **independently of the redactor**. Correlated errors would hide
    leaks, so the verifier uses higher-resolution rendering (300 DPI) and its own OCR
@@ -394,7 +396,7 @@ floor. Precision is reported, not gated.
 | 6 | Another extension or process talks to the host | `allowed_origins` lists one fixed extension ID; host checks the caller origin |
 | 7 | A user edits the policy to weaken it | Managed layer + tighten-only merge |
 | 8 | Context re-identifies a pseudonym ("the CEO of [ORG_1]") | Documented residual risk; out of scope for the MVP |
-| 9 | OCR misses small, rotated or low-contrast text | 200 DPI raster, full-size reads, four quarter turns (RapidOCR's own classifier only knows 180 degrees), a 2x pass for small images, padded boxes, corpus hard cases |
+| 9 | OCR misses small, rotated or low-contrast text | 200 DPI raster, full-size reads, four quarter turns (RapidOCR's own classifier only knows 180 degrees; the three turned reads are skipped only when the upright read left no box unread, never at dial 5), a 2x pass for small images, padded boxes, corpus hard cases |
 | 10 | Slow redaction breaks the chat flow (measured: 6.1 s cold start, about 11 s per PDF page, 9.5 s per 1080p screenshot) | Warm host, faster OCR and visible progress; see docs/perf/speed-plan.md (approved) |
 | 11 | OS keychain unavailable (headless Linux) | Fail closed with a clear setup message |
 | 12 | Face test images must be synthetic and license-clean | Public-domain AI-generated portraits; sources in `tests/fixtures/faces/SOURCES.md` |

@@ -16,7 +16,8 @@ import pypdfium2 as pdfium
 import pytest
 
 import generate as gen
-from corpus_media import FACES
+from corpus_media import FACES, ROTATED_STRESS, STRESS_PAGE, stress_variant
+from PIL import Image
 
 SEED = 42
 PER_VARIANT = 1
@@ -80,7 +81,7 @@ def test_pdf_text_layer(corpus):
         # test would pass it without ever checking it.
         text = page.get_textpage().get_text_bounded(*page.get_cropbox())
 
-        if doc["variant"] == "scanned":
+        if doc["variant"] in ("scanned", "scanned_sideways"):
             assert text == ""
             continue
 
@@ -120,6 +121,30 @@ def test_manifest_schema(corpus):
             assert e["id"] not in seen_ids
             seen_ids.add(e["id"])
     assert (out / "company_terms.txt").is_file()
+
+
+def test_every_rotated_stress_case_is_in_every_corpus_once(corpus):
+    """All 48, whatever --per-variant says: each is one way a skipped OCR pass could leak."""
+    out, manifest = corpus
+    stress = [d for d in manifest["documents"] if d["variant"].startswith("rotated_")]
+    assert sorted(d["variant"] for d in stress) == sorted(stress_variant(*case) for case in ROTATED_STRESS)
+    assert len(ROTATED_STRESS) == 48
+    for doc in stress:
+        (value,) = doc["seeded"]
+        assert value["location"] == doc["variant"] and value["entity_type"] in {"PERSON", "PHONE", "IBAN", "EMAIL"}
+        with Image.open(out / doc["file"]) as img:
+            assert img.size == STRESS_PAGE
+
+
+def test_the_sideways_scan_is_an_image_turned_on_its_side(corpus):
+    out, manifest = corpus
+    (doc,) = [d for d in manifest["documents"] if d["variant"] == "scanned_sideways"]
+    page = pdfium.PdfDocument(str(out / doc["file"]))[0]
+    assert page.get_size() == (612, 792) and page.get_rotation() == 0  # an upright page; the scan inside is turned
+    (image,) = [obj for obj in page.get_objects() if obj.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE]
+    width, height = image.get_px_size()
+    assert width < height  # the 792 x 612 text image stood on its side
+    assert [e["entity_type"] for e in doc["seeded"]] == ["PERSON", "PHONE", "IBAN"]
 
 
 def test_every_photo_seeds_one_face_from_the_fixtures(corpus):

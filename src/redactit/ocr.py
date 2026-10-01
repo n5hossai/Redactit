@@ -11,9 +11,14 @@ from itertools import accumulate
 import numpy as np
 from PIL import Image, ImageDraw
 
+from redactit.cores import physical_cores
+from redactit.policy import DIAL
+
 Quad = tuple[tuple[float, float], ...]
 
 TURNS = (1, 2, 3)  # quarter turns tried after the upright read, so text at any orientation reads upright once
+STRICT_DIAL = max(DIAL)  # the tightest dial position: it always runs every OCR pass
+TEXT_SCORE = 0.5  # RapidOCR's own cut-off: a read scored lower is dropped as noise
 # RapidOCR shrinks anything longer than MAX_SIDE before reading it: at 2000 px a 4K screenshot's
 # 14 px text became unreadable and survived. Images past MAX_SIDE are read in overlapping tiles.
 MAX_SIDE, TILE_OVERLAP = 4096, 512
@@ -35,22 +40,79 @@ class Line:
 
 @cache
 def _engine():
+    import onnxruntime as ort
     from redactit import models
 
     pending = models.verify(models.OCR_MODELS)  # hashes while OpenCV and RapidOCR import
     from rapidocr_onnxruntime import RapidOCR
 
-    # Explicit paths, held unchanged until RapidOCR's sessions have read them (THREAT_MODEL T15).
+    # Explicit paths, held unchanged until the sessions have read them (THREAT_MODEL T15).
     with pending as paths:
-        return RapidOCR(max_side_len=MAX_SIDE, det_model_path=str(paths["rapidocr/det.onnx"]),
-                        cls_model_path=str(paths["rapidocr/cls.onnx"]), rec_model_path=str(paths["rapidocr/rec.onnx"]))
+        engine = RapidOCR(max_side_len=MAX_SIDE, det_model_path=str(paths["rapidocr/det.onnx"]),
+                          cls_model_path=str(paths["rapidocr/cls.onnx"]), rec_model_path=str(paths["rapidocr/rec.onnx"]))
+        # RapidOCR builds its sessions with onnxruntime's memory arena off, so every buffer for
+        # an image size not seen before came fresh from the OS: a new 720p screenshot took 5.9 s
+        # against 3.6 s for the same one again. The arena is fixed when a session is built, so
+        # the detector and recognizer are rebuilt from the same held files (the angle classifier
+        # never runs: use_cls=False). _trim() hands the arena's memory back after each image.
+        for wrapper, name in ((engine.text_det.infer, "rapidocr/det.onnx"), (engine.text_rec.session, "rapidocr/rec.onnx")):
+            options = ort.SessionOptions()
+            options.log_severity_level = 4  # errors only, as RapidOCR sets it
+            options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            options.enable_cpu_mem_arena = True
+            options.intra_op_num_threads = physical_cores()  # the same choice as the name model (cores.py)
+            wrapper.session = ort.InferenceSession(
+                str(paths[name]), options, providers=[("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"})])
+    return engine
 
 
-def read_lines(img: Image.Image) -> list[Line]:
-    """Every text line in the image, including text turned 90, 180 or 270 degrees and small text."""
+@cache
+def _shrink():
+    import onnxruntime as ort
+
+    options = ort.RunOptions()
+    options.add_run_config_entry("memory.enable_memory_arena_shrinkage", "cpu:0")
+    return options
+
+
+def _trim() -> None:
+    """Return the arena's free memory to the OS. Kept, it held 1.1-1.6 GB after one 720p or
+    1080p screenshot, on top of the engine. Shrinking happens at the end of a run, so each
+    session runs once on a tiny blank input (about 50 ms in all). A new image then regrows the
+    arena once and reuses it across its passes, which keeps nearly all of the arena's gain."""
+    engine = _engine()
+    for session, shape in ((engine.text_det.infer.session, (1, 3, 32, 32)),
+                           (engine.text_rec.session.session, (1, 3, 48, 32))):
+        session.run(None, {session.get_inputs()[0].name: np.zeros(shape, np.float32)}, _shrink())
+
+
+def read_lines(img: Image.Image, dial: int = STRICT_DIAL) -> list[Line]:
+    """Every text line in the image, including text turned 90, 180 or 270 degrees and small text.
+
+    `dial` is the policy's: below the strictest, a view whose upright pass left nothing
+    unread skips its turned passes (skip_turned_passes).
+    """
     rgb = img if img.mode == "RGB" else img.convert("RGB")
-    found = [(score, _shift(line, x, y)) for (x, y), tile in _tiles(rgb) for score, line in _read_view(tile)]
+    try:
+        found = [(score, _shift(line, x, y)) for (x, y), tile in _tiles(rgb) for score, line in _read_view(tile, dial)]
+    finally:
+        _trim()
     return _reading_order(_merge(found))
+
+
+def skip_turned_passes(confident: int, unread: int, dial: int) -> bool:
+    """Whether a view can skip its three turned passes, given what its upright pass did.
+
+    `confident` counts upright lines read with confidence; `unread` counts every other box
+    upright detection found: read with a low score, shorter than 3 characters, or running
+    sideways. The turned passes cost 0.6 s on a 720p screenshot, 3 s on a PDF page and 7 s
+    at 4K, and only matter for text the upright read could not take, so they are skipped
+    when at least one line was read confidently and no box was left unread. Detection boxes
+    turned text as well (it did for all 48 rotated stress values), and such a box is unread.
+    A view with no upright box at all still gets every pass: a page whose only text is
+    sideways may give the detector nothing upright to box. The strictest dial never skips.
+    """
+    return dial < STRICT_DIAL and confident >= 1 and unread == 0
 
 
 def _tiles(img: Image.Image):
@@ -66,14 +128,18 @@ def _shift(line: Line, dx: float, dy: float) -> Line:
     return Line(line.text, tuple((x + dx, y + dy) for x, y in line.quad), line.cuts)
 
 
-def _read_view(rgb: Image.Image) -> list[tuple[float, Line]]:
-    found = _read(rgb, 0, 1.0)
+def _read_view(rgb: Image.Image, dial: int) -> list[tuple[float, Line]]:
+    # Every box upright detection found, however badly it read, in the same call: the gate
+    # needs the ones RapidOCR would drop. Keeping TEXT_SCORE and up gives its usual result.
+    seen = _read(rgb, 0, 1.0, text_score=0.0)
+    found = [(score, line) for score, line in seen if score >= TEXT_SCORE]
     # The other passes only need what this one could not read, so upright lines it read with
     # confidence are painted out: reading every line again at every orientation and scale is
     # most of the time. Turned lines stay, because a wrong read of one can look confident.
     sure = [line for score, line in found if score >= CONFIDENT and len(line.text) >= 3 and _upright(line)]
     left = _erase(rgb, sure)
-    found += [line for turns in TURNS for line in _read(left, turns, 1.0)]
+    if not skip_turned_passes(len(sure), len(seen) - len(sure), dial):
+        found += [line for turns in TURNS for line in _read(left, turns, 1.0)]
     scale = min(UPSCALE, UPSCALE_SIDE / max(rgb.size))
     if scale >= MIN_UPSCALE:  # only the upright read is upscaled: rotated small text is rare
         big = left.resize((round(rgb.width * scale), round(rgb.height * scale)), Image.Resampling.BICUBIC)
@@ -95,13 +161,13 @@ def _erase(img: Image.Image, lines: list[Line]) -> Image.Image:
     return out
 
 
-def _read(view: Image.Image, turns: int, scale: float) -> list[tuple[float, Line]]:
+def _read(view: Image.Image, turns: int, scale: float, text_score: float = TEXT_SCORE) -> list[tuple[float, Line]]:
     """(score, line) for every line RapidOCR reads in `view` turned `turns` quarter turns, in view pixels / scale."""
     padded, (dx, dy) = _pad(view)
     pixels = np.ascontiguousarray(np.rot90(np.asarray(padded), turns)[..., ::-1])  # RapidOCR expects BGR
     # Without the angle classifier a line only reads right when it is upright, so its quad
     # is in reading order and no duplicate can come back with the corners reversed.
-    result, _ = _engine()(pixels, use_cls=False, return_word_box=True)
+    result, _ = _engine()(pixels, use_cls=False, return_word_box=True, text_score=text_score)
     out = []
     for box, text, score, chars, *_ in result or []:
         quad = tuple((float(x), float(y)) for x, y in box)

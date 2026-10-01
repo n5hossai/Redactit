@@ -5,12 +5,13 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, RecognizerResult
-from presidio_analyzer.nlp_engine import NlpEngineProvider
+from presidio_analyzer import AnalyzerEngine, EntityRecognizer, RecognizerRegistry, RecognizerResult
+from presidio_analyzer.nlp_engine import SlimSpacyNlpEngine
 from presidio_analyzer.predefined_recognizers import CreditCardRecognizer, IbanRecognizer
 
 from redactit.types import Span
 
+from . import scaling
 from .dictionary import CompanyTermRecognizer
 from .patterns import (
     ADDRESS,
@@ -35,6 +36,10 @@ _CHECKSUM_TYPES = {"CREDIT_CARD", "IBAN", "CA_SIN", "COMPANY_TERM"}
 _STRUCTURAL_TYPES = {"UK_NINO", "API_KEY"}
 STRUCTURAL_SCORE = 0.85
 
+# Every recognizer and the analyzer call this static method by name; the replacement keeps
+# Presidio's results and their order (scaling.py, tested against Presidio's own).
+EntityRecognizer.remove_duplicates = staticmethod(scaling.remove_duplicates)
+
 
 class Detector:
     """`Detector(company_terms=[...])` builds the analyzer once (the slow part);
@@ -42,12 +47,11 @@ class Detector:
     """
 
     def __init__(self, company_terms: list[str] | None = None) -> None:
-        nlp_engine = NlpEngineProvider(
-            nlp_configuration={
-                "nlp_engine_name": "spacy",
-                "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
-            }
-        ).create_engine()
+        # Tokens, lemmas, stop words and punctuation are all Presidio reads from spaCy: no spaCy
+        # recognizer is registered. The slim engine skips the parser and spaCy's own NER (spans
+        # identical, pattern stage 17-28% faster) and never downloads a missing model.
+        nlp_engine = SlimSpacyNlpEngine(models=[{"lang_code": "en", "model_name": "en_core_web_sm"}],
+                                        auto_download=False)
         recognizers = [
             # Luhn-checked, plus the Mastercard 2-series range Presidio's regex lacks.
             CreditCardRecognizer(patterns=CreditCardRecognizer.PATTERNS + [MASTERCARD_2_SERIES]),
@@ -69,7 +73,8 @@ class Detector:
         # Built from exactly this list, never `load_predefined_recognizers`, so spaCy's own
         # NER adds nothing: names and most addresses come from the GLiNER model (ner.py).
         registry = RecognizerRegistry(recognizers=recognizers, supported_languages=["en"])
-        self._analyzer = AnalyzerEngine(registry=registry, nlp_engine=nlp_engine, supported_languages=["en"])
+        self._analyzer = AnalyzerEngine(registry=registry, nlp_engine=nlp_engine, supported_languages=["en"],
+                                        context_aware_enhancer=scaling.LinearContextEnhancer())
 
     def detect(self, text: str) -> list[Span]:
         results = self._analyzer.analyze(text=text, language="en")
