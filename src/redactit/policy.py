@@ -122,9 +122,12 @@ class Policy(_Strict):
         The union is redacted so no part of any accepted span survives: dropping the loser
         of an overlap once let "priya.okafor@northwind.com" keep its local part when the
         domain was a company term. The widest span names the entity; on a tie a validated,
-        then higher-scoring, span wins.
+        then higher-scoring, span wins, and a last tie goes by type and detector name. Without
+        that last step the winner followed Presidio's set order, which changes with the hash
+        seed: a bare 9-digit run was PASSPORT in one process and US_SSN in the next.
         """
-        span, cfg, threshold = max(group, key=lambda c: (c[0].end - c[0].start, c[0].validated, c[0].score))
+        span, cfg, threshold = max(group, key=lambda c: (c[0].end - c[0].start, c[0].validated, c[0].score,
+                                                         c[0].entity_type, c[0].detector))
         union = replace(span, start=min(c[0].start for c in group), end=max(c[0].end for c in group))
         needs_review = self.review.mode == "always" or (
             not span.validated and span.score < threshold + REVIEW_MARGIN
