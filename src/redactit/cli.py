@@ -1,4 +1,4 @@
-"""Command-line interface: `redactit redact`, `watch`, `setup-models` and `host`."""
+"""Command-line interface: `redactit redact`, `watch`, `clip`, `setup-models` and `host`."""
 
 import argparse
 import io
@@ -162,6 +162,19 @@ def _watch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _clip(args: argparse.Namespace) -> int:
+    from redactit import models, safety
+    from redactit.hosts import clipboard
+
+    safety.block_network()
+
+    def engine():  # loaded only once the clipboard turns out to hold text worth redacting
+        pending = models.verify(models.TEXT_MODELS)  # hashes in a thread while open_engine's imports run
+        return open_engine(args.policy, pending)
+
+    return clipboard.redact_clipboard(engine, scope=args.scope)
+
+
 def _setup_models(_args: argparse.Namespace) -> int:
     from redactit import models
 
@@ -195,6 +208,13 @@ def main(argv: list[str] | None = None) -> int:
     watch.add_argument("--policy", type=Path, help="policy file (default: user policy if present)")
     watch.add_argument("--scope", help="reuse one set of pseudonyms for every file (default: a new set per file)")
     watch.set_defaults(run=_watch)
+
+    clip = sub.add_parser("clip", help="redact the clipboard's text in place, once (an OS shortcut runs this)",
+                          epilog="exit status: 0 written back, 3 nothing to redact (no text, or concealed), "
+                                 "1 failed; unless 0, the clipboard is untouched")
+    clip.add_argument("--policy", type=Path, help="policy file (default: user policy if present)")
+    clip.add_argument("--scope", help="reuse pseudonyms across runs that share this name")
+    clip.set_defaults(run=_clip)
 
     setup = sub.add_parser("setup-models", help="download and verify the pinned models (needs network once)")
     setup.set_defaults(run=_setup_models)
