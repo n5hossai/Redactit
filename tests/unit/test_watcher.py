@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 from redactit.cli import output_name, output_suffixes, redact_file
+from redactit.detect.registry import PatternTimeout
 from redactit.hosts import watcher
 from redactit.hosts.watcher import TEMP_PREFIX, Watcher
 from redactit.types import RedactitError
@@ -341,6 +342,20 @@ def test_bad_files_are_logged_without_their_names_or_content(boxes):
     assert sorted(p.name for p in outbox.iterdir()) == ["good.txt"]
     assert (outbox / "good.txt").read_text(encoding="utf-8") == "Call [PERSON_1]."
     assert {p.name: p.read_bytes() for p in inbox.iterdir()} == files  # originals untouched
+
+
+def test_a_detection_timeout_skips_the_file_and_writes_nothing(boxes):
+    class TimingOut:
+        def redact(self, *_args, **_kwargs):
+            raise PatternTimeout("a detection pattern timed out; nothing was redacted")
+
+    inbox, outbox = boxes
+    convert = lambda name, data: redact_file(name, data, TimingOut(), "scope", destination="outbox")  # noqa: E731
+    with running(inbox, outbox, convert) as (_, log):
+        (inbox / "notes.txt").write_bytes(b"Call Priya Okafor.")
+        wait_for(lambda: len(log) >= 2)
+    assert log[1:] == ["skipped a .txt file: a detection pattern timed out; nothing was redacted"]
+    assert list(outbox.iterdir()) == []
 
 
 def test_retention_is_undecided_so_nothing_is_deleted():

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from redactit import cli, models
+from redactit.detect.registry import PatternTimeout
 from redactit.hosts import clipboard
 from redactit.hosts.clipboard import CF_UNICODETEXT, SKIPPED, ClipboardError, Item, Linux, MacOS, Windows
 
@@ -347,6 +348,17 @@ def test_a_failing_engine_leaves_the_clipboard_untouched(command, monkeypatch, c
     assert command.written is None
     err = capsys.readouterr().err
     assert "RuntimeError (details withheld" in err and "Priya" not in err and "Okafor" not in err
+
+
+def test_a_detection_timeout_leaves_the_clipboard_untouched(command, monkeypatch, capsys):
+    class TimingOut:
+        def redact(self, *_args, **_kwargs):
+            raise PatternTimeout("a detection pattern timed out; nothing was redacted")
+
+    monkeypatch.setattr(cli, "open_engine", lambda *_args: TimingOut())
+    assert cli.main(["clip"]) == 1
+    assert command.written is None
+    assert capsys.readouterr().err == "error: a detection pattern timed out; nothing was redacted\n"
 
 
 def test_a_clipboard_that_changed_meanwhile_is_left_alone(command, monkeypatch, capsys):
