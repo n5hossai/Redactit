@@ -634,9 +634,9 @@ def _open_engine():
     from redactit import models
 
     pending = models.verify(models.TEXT_MODELS)  # the hash runs while the engine's imports below do
-    from redactit.cli import open_engine
-
-    return open_engine(verified=pending)
+    with models.released_on_error(pending):
+        from redactit.cli import open_engine
+    return open_engine(verified=pending)  # releases it too if the engine cannot be built
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:

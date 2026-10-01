@@ -49,7 +49,8 @@ def _engine():
     from redactit import models
 
     pending = models.verify(models.OCR_MODELS)  # hashes while OpenCV and RapidOCR import
-    from rapidocr_onnxruntime import RapidOCR
+    with models.released_on_error(pending):
+        from rapidocr_onnxruntime import RapidOCR
 
     # Explicit paths, held unchanged until the sessions have read them (THREAT_MODEL T15).
     with pending as paths:

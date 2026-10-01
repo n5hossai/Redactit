@@ -45,13 +45,17 @@ def effective_policy(path: Path | None = None):
 
 def open_engine(policy: Path | None = None, verified=None):
     """The engine with the user's policy, keychain vault and audit log. `verified` is a
-    `models.verify(...)` the caller started before its imports (see Engine)."""
-    from redactit.audit import AuditLog
-    from redactit.pipeline import Engine
-    from redactit.vault import Vault
+    `models.verify(...)` the caller started before its imports (see Engine); it is
+    released here if the engine cannot be built."""
+    from redactit import models
 
-    paths = _paths()
-    return Engine(effective_policy(policy), Vault.open(paths["vault"]), AuditLog(paths["audit"]), verified=verified)
+    with models.released_on_error(verified):
+        from redactit.audit import AuditLog
+        from redactit.pipeline import Engine
+        from redactit.vault import Vault
+
+        paths = _paths()
+        return Engine(effective_policy(policy), Vault.open(paths["vault"]), AuditLog(paths["audit"]), verified=verified)
 
 
 def output_name(name: str, suffix: str) -> str:
@@ -109,8 +113,8 @@ def _redact(args: argparse.Namespace) -> int:
 
     safety.block_network()  # before any detector or model code is imported and run
     pending = models.verify(models.TEXT_MODELS)  # hashes in a thread while the imports below run
-    from redactit.formats import docx, image, pdf  # noqa: F401 - loaded now, while the hash runs
-
+    with models.released_on_error(pending):
+        from redactit.formats import docx, image, pdf  # noqa: F401 - loaded now, while the hash runs
     engine = open_engine(args.policy, pending)
     if any(SUFFIXES.get(src.suffix.lower()) in ("pdf", "image") for src in args.paths):
         engine.warm_images()  # verifies and loads OCR and faces up front, and audits it
@@ -145,8 +149,8 @@ def _watch(args: argparse.Namespace) -> int:
     try:
         safety.block_network()
         pending = models.verify(models.TEXT_MODELS)
-        from redactit.formats import docx, image, pdf  # noqa: F401 - loaded now, while the hash runs
-
+        with models.released_on_error(pending):
+            from redactit.formats import docx, image, pdf  # noqa: F401 - loaded now, while the hash runs
         engine = open_engine(args.policy, pending)  # one engine for the whole run: the cold start is paid once
         engine.warm_text()
         engine.warm_images()  # now, so the first PDF or image dropped does not wait for OCR to load

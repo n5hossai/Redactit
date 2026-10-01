@@ -133,3 +133,81 @@ def test_unchanged_file_passes_the_second_hash(good, monkeypatch):
     monkeypatch.setattr(models, "HOLDS", False)
     with models.verify(["m/weights.bin"]) as paths:
         assert paths["m/weights.bin"].read_bytes() == GOOD
+
+
+# --- A start that fails before loading must release the files --------------------------------
+# On Windows a verification holds its files against writes until it is closed; one left
+# open keeps them locked, `redactit setup-models` included, for the life of the process.
+
+
+@pytest.fixture
+def text_models(tmp_path, monkeypatch):
+    """Stand-ins for the text model files with pins that match them, plus every
+    verification started, so the test can check each was released."""
+    monkeypatch.setenv("REDACTIT_MODEL_DIR", str(tmp_path / "models"))
+    monkeypatch.setenv("REDACTIT_DATA_DIR", str(tmp_path / "data"))
+    paths = []
+    for name in models.TEXT_MODELS:
+        path = models.local_path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"stand-in for {name}".encode())
+        monkeypatch.setitem(models.LOCK, name, {**models.LOCK[name], "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+        paths.append(path)
+    started, verify = [], models.verify
+    monkeypatch.setattr(models, "verify", lambda names: started.append(verify(names)) or started[-1])
+    return paths, started
+
+
+def assert_released(paths, started):
+    for v in started:
+        v._thread.join()  # a quick failure can beat the hashing thread to the files
+    assert started and all(v._files == [] for v in started)
+    for path in paths:
+        path.open("r+b").close()  # PermissionError on Windows while a verification holds it
+
+
+def test_a_bad_policy_releases_the_model_files(text_models, tmp_path):
+    from redactit import cli
+
+    bad = tmp_path / "policy.yaml"
+    bad.write_text("- not a mapping\n", encoding="utf-8")
+    src = tmp_path / "notes.txt"
+    src.write_text("synthetic", encoding="utf-8")
+    assert cli.main(["redact", str(src), "--out", str(tmp_path / "out"), "--policy", str(bad)]) == 1
+    assert_released(*text_models)
+
+
+def test_a_keychain_error_releases_the_model_files(text_models, monkeypatch):
+    from redactit.hosts import native
+    from redactit.vault import Vault, VaultError
+
+    def no_keychain(_path):
+        raise VaultError("no usable OS keychain found; refusing to store the vault key on disk")
+
+    monkeypatch.setattr(Vault, "open", staticmethod(no_keychain))
+    with pytest.raises(VaultError):
+        native._open_engine()
+    assert_released(*text_models)
+
+
+def test_a_detector_that_cannot_be_built_releases_the_model_files(text_models, monkeypatch):
+    from redactit import pipeline
+    from redactit.policy import load_policy
+
+    def broken(**_kwargs):
+        raise RuntimeError("the spaCy model is missing")
+
+    monkeypatch.setattr(pipeline, "Detector", broken)
+    with pytest.raises(RuntimeError):
+        pipeline.Engine(load_policy(None), None, verified=models.verify(models.TEXT_MODELS))
+    assert_released(*text_models)
+
+
+def test_a_failed_ocr_import_releases_the_model_files(text_models, monkeypatch):
+    from redactit import ocr
+
+    monkeypatch.setattr(models, "OCR_MODELS", models.TEXT_MODELS)  # files this test can stand in for
+    monkeypatch.setitem(sys.modules, "rapidocr_onnxruntime", None)  # so its import fails
+    with pytest.raises(ImportError):
+        ocr._engine.__wrapped__()
+    assert_released(*text_models)
