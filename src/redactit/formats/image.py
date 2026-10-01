@@ -46,7 +46,8 @@ def find_boxes(img: Image.Image, engine, scope: str, *, covered: list[Box] = (),
     date was not found again.
     """
     rgb = img if img.mode == "RGB" else img.convert("RGB")  # no copy of a 50 MP photo
-    lines = [_mask(line, covered) for line in ocr.read_lines(rgb)] if covered else ocr.read_lines(rgb)
+    lines = ocr.read_lines(rgb, dial=engine.policy.effective_dial())  # the strictest dial runs every OCR pass
+    lines = [_mask(line, covered) for line in lines] if covered else lines
     boxes, redacted = [], ""
     if lines:
         text = "\n".join(line.text for line in lines)

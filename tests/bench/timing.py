@@ -216,7 +216,7 @@ class Stages:
         return out
 
 
-def _ocr_pass(view, turns, scale):
+def _ocr_pass(view, turns, scale, **_):
     return "OCR, 2x pass for small text" if scale > 1 else ("OCR, turned passes" if turns else "OCR, upright pass")
 
 
