@@ -43,6 +43,7 @@ from redactit.types import RedactitError
 
 SKIPPED = 3  # exit status: nothing to redact, clipboard untouched
 CHANGED = "the clipboard changed while redacting; it was left as it is"
+CHANGED_DURING_READ = "the clipboard changed while it was read; it was left as it is"
 
 
 class ClipboardError(RedactitError):
@@ -255,6 +256,10 @@ class MacOS:
         if self.CONCEALED in list(self.pasteboard.types() or []):
             return Item(None, True, version)
         text = self.pasteboard.stringForType_(self.text_type)
+        # The concealment check and the read are separate calls, so a password manager
+        # could copy between them and its text be read as if it had been checked.
+        if self.pasteboard.changeCount() != version:
+            raise ClipboardError(CHANGED_DURING_READ)
         return Item(None if text is None else str(text), False, version)
 
     def write(self, text: str, version) -> None:
@@ -315,21 +320,33 @@ class Linux:
 
     def _snapshot(self) -> tuple[tuple[str, ...], bool, bytes | None]:
         """(the clipboard's types, concealed, the text's bytes or None)."""
-        listed = self._call(self._list)
-        if listed is None:  # both tools fail on an empty clipboard
+        types = self._types()
+        if types is None:  # both tools fail on an empty clipboard
             return (), False, None
-        types = tuple(line.strip() for line in listed.decode("utf-8", "replace").splitlines() if line.strip())
-        if self.HINT in types:
-            hint = self._call(self._get(self.HINT))
-            if hint is None or hint.strip() == b"secret":  # unreadable counts as secret
-                return types, True, None
+        if self.HINT in types and self._concealed():
+            return types, True, None
         kind = next((t for t in self.TEXT_TYPES if t in types), None)
         if kind is None:
             return types, False, None
         data = self._call(self._get(kind))
         if data is None:
             raise ClipboardError("the clipboard's text could not be read")
+        # Listing, checking and reading are separate programs, so a password manager could
+        # take the clipboard over between them. Listed and checked again after the read:
+        # text that may belong to another owner is refused.
+        if self._types() != types or (self.HINT in types and self._concealed()):
+            raise ClipboardError(CHANGED_DURING_READ)
         return types, False, data
+
+    def _types(self) -> tuple[str, ...] | None:
+        listed = self._call(self._list)
+        if listed is None:
+            return None
+        return tuple(line.strip() for line in listed.decode("utf-8", "replace").splitlines() if line.strip())
+
+    def _concealed(self) -> bool:
+        hint = self._call(self._get(self.HINT))
+        return hint is None or hint.strip() == b"secret"  # unreadable counts as secret
 
     def _call(self, cmd: list[str]) -> bytes | None:
         try:

@@ -214,6 +214,20 @@ def test_macos_refuses_to_write_after_the_clipboard_changed():
     assert pasteboard.items == {PLAIN: TEXT}
 
 
+def test_macos_refuses_text_read_after_the_concealment_check_went_stale():
+    pasteboard = FakePasteboard({PLAIN: TEXT})
+    read = pasteboard.stringForType_
+
+    def racing(kind):  # a password manager copies between the check and the read
+        pasteboard.items = {PLAIN: SECRET, "org.nspasteboard.ConcealedType": ""}
+        pasteboard.count += 1
+        return read(kind)
+
+    pasteboard.stringForType_ = racing
+    with pytest.raises(ClipboardError, match="changed while it was read"):
+        MacOS(pasteboard).read()
+
+
 # --- Linux ---------------------------------------------------------------------------------
 
 SESSIONS = {
@@ -277,6 +291,29 @@ def test_linux_refuses_to_write_after_the_clipboard_changed(session):
     with pytest.raises(ClipboardError, match="changed"):
         board.write("Call [PERSON_1].", item.version)
     assert fake.board == {"text/plain;charset=utf-8": b"something newer"}
+
+
+UTF8 = "text/plain;charset=utf-8"
+
+
+@pytest.mark.parametrize("session", SESSIONS)
+@pytest.mark.parametrize("before, after", [
+    ({UTF8: TEXT.encode()}, {UTF8: SECRET.encode(), Linux.HINT: b"secret"}),
+    ({UTF8: TEXT.encode(), Linux.HINT: b"public"}, {UTF8: SECRET.encode(), Linux.HINT: b"secret"}),
+    ({UTF8: TEXT.encode()}, {UTF8: b"copied later", "text/html": b"<b>copied later</b>"}),
+], ids=["now concealed", "same types, now concealed", "other types"])
+def test_linux_refuses_text_read_after_the_concealment_check_went_stale(session, before, after):
+    board, fake = linux(session, before)
+
+    def racing(cmd, **kwargs):  # another owner takes the clipboard as the text is read
+        result = fake(cmd, **kwargs)
+        if cmd[0] in ("wl-paste", "xclip") and "-i" not in cmd and cmd[-1] == UTF8:
+            fake.board = dict(after)
+        return result
+
+    board._run = racing
+    with pytest.raises(ClipboardError, match="changed while it was read"):
+        board.read()
 
 
 def test_linux_without_a_clipboard_tool_fails_with_a_hint():
