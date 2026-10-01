@@ -313,7 +313,7 @@ floor. Precision is reported, not gated.
 | 7 | A user edits the policy to weaken it | Managed layer + tighten-only merge |
 | 8 | Context re-identifies a pseudonym ("the CEO of [ORG_1]") | Documented residual risk; out of scope for the MVP |
 | 9 | OCR misses small, rotated or low-contrast text | 200 DPI raster, full-size reads, four quarter turns (RapidOCR's own classifier only knows 180 degrees), a 2x pass for small images, padded boxes, corpus hard cases |
-| 10 | Model load makes the hotkey feel slow (3 to 5 s) | Accepted for the MVP; measured and reported |
+| 10 | Slow redaction breaks the chat flow (measured: 6.1 s cold start, about 11 s per PDF page, 9.5 s per 1080p screenshot) | Warm host, faster OCR and visible progress; see docs/perf/speed-plan.md (proposed) |
 | 11 | OS keychain unavailable (headless Linux) | Fail closed with a clear setup message |
 | 12 | Face test images must be synthetic and license-clean | Public-domain AI-generated portraits; sources in `tests/fixtures/faces/SOURCES.md` |
 
