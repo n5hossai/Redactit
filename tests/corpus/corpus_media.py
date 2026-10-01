@@ -6,6 +6,7 @@ QR payloads and EXIF -- none of that comes from a single high-level API.
 """
 from __future__ import annotations
 
+import itertools
 from pathlib import Path
 
 import reportlab.rl_config as rl_config
@@ -135,6 +136,27 @@ def _text_page_image(lines: list[str], size: tuple[int, int]) -> Image.Image:
     return img
 
 
+def build_sideways_scan(vf, path: Path) -> list[dict]:
+    """A scanned page, no text layer, whose only text runs sideways: the page was scanned turned.
+
+    The upright OCR pass may find nothing on it to box, so a reader that skips its turned
+    passes when the upright pass is empty would miss every value.
+    """
+    entries: list[dict] = []
+    width, height = LETTER
+    person = _seed(entries, "PERSON", vf.person(), "page_image_sideways")
+    phone = _seed(entries, "PHONE", vf.phone(), "page_image_sideways")
+    iban = _seed(entries, "IBAN", vf.iban(), "page_image_sideways")
+    lines = [vf.filler_sentence(), f"Patient: {person}", f"Phone: {phone}", f"IBAN {iban}"]
+    landscape = _text_page_image(lines, size=(int(height), int(width)))
+    c = rl_canvas.Canvas(str(path), pagesize=LETTER)
+    page_img = landscape.rotate(vf.rng.choice([90, 270]), expand=True)  # portrait again, text on its side
+    c.drawImage(ImageReader(page_img), 0, 0, width=width, height=height)
+    c.showPage()
+    c.save()
+    return entries
+
+
 # ---------------------------------------------------------------------------
 # PNG / JPG variant
 # ---------------------------------------------------------------------------
@@ -152,6 +174,35 @@ def _qr_image(payload: str, scale: int = 6) -> Image.Image:
     bitmap = zxingcpp.write_barcode_to_image(barcode, scale=scale)
     h, w = bitmap.shape  # avoid a numpy dependency: read via the buffer protocol
     return Image.frombuffer("L", (w, h), bytes(bitmap), "raw", "L", 0, 1).convert("RGB")
+
+
+# Where a gate on OCR's turned passes could fail: one value turned 90, 180 or 270 degrees, at
+# 14-32 px, in black or grey, alone on the page or below 12 upright lines read with confidence.
+ROTATED_STRESS = list(itertools.product((90, 180, 270), (14, 18, 24, 32), (False, True), (0, 12)))
+STRESS_PAGE = (1280, 900)
+
+
+def stress_variant(angle: int, size: int, grey: bool, filler: int) -> str:
+    return f"rotated_{angle}_{size}px_{'grey' if grey else 'black'}_{'below_text' if filler else 'alone'}"
+
+
+def build_rotated_stress(case: tuple[int, int, bool, int], vf, path: Path) -> list[dict]:
+    """One rotated value in the page's bottom-right corner, clear of the upright filler lines."""
+    angle, size, grey, filler = case
+    entries: list[dict] = []
+    img = Image.new("RGB", STRESS_PAGE, "white")
+    d, small = ImageDraw.Draw(img), ImageFont.load_default(size=18)
+    for i in range(filler):
+        d.text((60, 40 + 34 * i), vf.filler_sentence()[:90], font=small, fill="black")
+    entity, make = vf.rng.choice([("PERSON", vf.person), ("PHONE", vf.phone), ("IBAN", vf.iban), ("EMAIL", vf.email)])
+    value = _seed(entries, entity, make(), stress_variant(*case))
+    font = ImageFont.load_default(size=size)
+    block = Image.new("RGB", (int(font.getlength(value)) + 20, size + 16), "white")
+    ImageDraw.Draw(block).text((10, 6), value, font=font, fill=LOW_CONTRAST_GRAY if grey else "black")
+    block = block.rotate(angle, expand=True, fillcolor="white")
+    img.paste(block, (STRESS_PAGE[0] - block.width - 40, STRESS_PAGE[1] - block.height - 40))
+    img.save(path, format="PNG")
+    return entries
 
 
 SCREEN = (3840, 2160)
