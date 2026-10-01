@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -20,6 +21,7 @@ _RULE_ID_RE = re.compile(r"^([a-z0-9_.]{1,64}|entities\.[A-Z_]{2,32})$")
 _FILE_TYPE_RE = re.compile(r"^[a-z0-9]{1,8}$")
 _HOSTNAME_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$")
 _DESTINATIONS = {"outbox", "clipboard", "cli"}
+_MODEL_SOURCES = {"download", "package"}  # fetched by setup-models, or shipped inside a package
 
 
 def _is_bool(v: Any) -> bool:
@@ -60,6 +62,10 @@ def _is_destination(v: Any) -> bool:
 
 def _is_sha256(v: Any) -> bool:
     return isinstance(v, str) and bool(re.fullmatch(r"[0-9a-f]{64}", v))
+
+
+def _is_model_source(v: Any) -> bool:
+    return v in _MODEL_SOURCES
 
 
 def _is_reason_code(v: Any) -> bool:
@@ -104,7 +110,7 @@ _EVENT_FIELDS: dict[str, dict[str, Callable[[Any], bool]]] = {
         "entity_count": _is_count,
         "locked_count": _is_count,
     },
-    "model_verified": {"model": _is_rule_id, "revision": _is_rule_id, "sha256": _is_sha256},
+    "model_verified": {"model": _is_rule_id, "source": _is_model_source, "revision": _is_rule_id, "sha256": _is_sha256},
     "redaction": {
         "file_type": _is_file_type,
         "destination": _is_destination,
@@ -123,6 +129,9 @@ class AuditLog:
 
     def __init__(self, path: Path) -> None:
         self._path = path
+        # The native host writes from more than one thread, and two appends racing on one
+        # file can overwrite each other's line on Windows.
+        self._lock = threading.Lock()
         path.parent.mkdir(parents=True, exist_ok=True)
 
     def write(self, event: str, **fields: Any) -> None:
@@ -141,5 +150,5 @@ class AuditLog:
                 raise ValueError(f"{event}: invalid value for field {name!r}")
 
         record = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"), "event": event, **fields}
-        with self._path.open("a", encoding="utf-8") as fh:
+        with self._lock, self._path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")

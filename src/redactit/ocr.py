@@ -35,9 +35,15 @@ class Line:
 
 @cache
 def _engine():
+    from redactit import models
+
+    pending = models.verify(models.OCR_MODELS)  # hashes while OpenCV and RapidOCR import
     from rapidocr_onnxruntime import RapidOCR
 
-    return RapidOCR(max_side_len=MAX_SIDE)
+    # Explicit paths, held unchanged until RapidOCR's sessions have read them (THREAT_MODEL T15).
+    with pending as paths:
+        return RapidOCR(max_side_len=MAX_SIDE, det_model_path=str(paths["rapidocr/det.onnx"]),
+                        cls_model_path=str(paths["rapidocr/cls.onnx"]), rec_model_path=str(paths["rapidocr/rec.onnx"]))
 
 
 def read_lines(img: Image.Image) -> list[Line]:
