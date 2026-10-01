@@ -5,11 +5,12 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
+import regex
 from presidio_analyzer import AnalyzerEngine, EntityRecognizer, RecognizerRegistry, RecognizerResult
 from presidio_analyzer.nlp_engine import SlimSpacyNlpEngine
 from presidio_analyzer.predefined_recognizers import CreditCardRecognizer, IbanRecognizer
 
-from redactit.types import Span
+from redactit.types import RedactitError, Span
 
 from . import scaling
 from .dictionary import CompanyTermRecognizer
@@ -41,6 +42,43 @@ STRUCTURAL_SCORE = 0.85
 EntityRecognizer.remove_duplicates = staticmethod(scaling.remove_duplicates)
 
 
+PATTERN_TIMEOUT_S = 60  # a search this slow is runaway backtracking, not text
+
+
+class PatternTimeout(RedactitError):
+    """A detection pattern ran past PATTERN_TIMEOUT_S, so the text was not fully checked."""
+
+
+class _FailClosed:
+    """A compiled pattern whose timeout stops the redaction instead of skipping the pattern.
+
+    Presidio catches a pattern's TimeoutError, logs it and moves on, so a crafted input could
+    pass that pattern unchecked. It also takes the limit from REGEX_TIMEOUT_SECONDS, which a
+    0 in the environment would turn into "skip every pattern". This uses a fixed limit and
+    raises, so the caller writes nothing.
+    """
+
+    def __init__(self, compiled) -> None:
+        self.wrapped = compiled
+
+    def finditer(self, text: str, timeout=None):
+        try:
+            yield from self.wrapped.finditer(text, timeout=PATTERN_TIMEOUT_S)
+        except TimeoutError:
+            raise PatternTimeout("a detection pattern timed out; nothing was redacted") from None
+
+
+def _fail_closed(recognizers: list) -> None:
+    """Wrap every regex pattern of every pattern recognizer in `_FailClosed`."""
+    for recognizer in recognizers:
+        for pattern in getattr(recognizer, "patterns", ()):
+            flags = recognizer.global_regex_flags
+            if not pattern.compiled_regex or pattern.compiled_with_flags != flags:
+                pattern.compiled_regex = regex.compile(pattern.regex, flags=flags)
+            # Presidio recompiles when these flags differ from the recognizer's; they match.
+            pattern.compiled_regex, pattern.compiled_with_flags = _FailClosed(pattern.compiled_regex), flags
+
+
 class Detector:
     """`Detector(company_terms=[...])` builds the analyzer once (the slow part);
     `detect(text)` returns `Span`s in Redactit's entity vocabulary.
@@ -70,6 +108,7 @@ class Detector:
         ]
         if company_terms:
             recognizers.append(CompanyTermRecognizer(company_terms))
+        _fail_closed(recognizers)
         # Built from exactly this list, never `load_predefined_recognizers`, so spaCy's own
         # NER adds nothing: names and most addresses come from the GLiNER model (ner.py).
         registry = RecognizerRegistry(recognizers=recognizers, supported_languages=["en"])

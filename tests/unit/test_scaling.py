@@ -117,7 +117,7 @@ def test_presidio_keeps_the_anchored_search(det):
     """Presidio recompiles a pattern, as a plain and slow regex, when its flags differ from the recognizer's."""
     det.detect("1 Main Street, Springfield, IL 62704")
     assert [p.name for p in ANCHORED] == ["UK postcode", "CA postal code", "US state and ZIP"]
-    assert all(isinstance(p.compiled_regex, _Anchored) for p in ANCHORED)
+    assert all(isinstance(p.compiled_regex.wrapped, _Anchored) for p in ANCHORED)  # inside the timeout guard
 
 
 def test_spacy_never_downloads_a_missing_model(det):
