@@ -109,3 +109,8 @@ def test_oversized_pages_are_refused(engine):
     c.save()
     with pytest.raises(PdfError, match="too large"):
         redact_pdf(buf.getvalue(), engine, scope="t")
+
+
+def test_the_redacted_pdf_does_not_say_when_it_was_redacted(engine):
+    out, _ = redact_pdf(_pdf([["Nothing sensitive here."]]), engine, scope="t")
+    assert pdfium.PdfDocument(out).get_metadata_dict().get("CreationDate") == "D:19700101000000+00'00'"

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes
 import io
+import re
 from typing import Callable
 
 import pypdfium2 as pdfium
@@ -60,7 +61,18 @@ def redact_pdf(data: bytes, engine, scope: str, *, destination: str = "cli", sit
         markdown.append(f"## Page {number}\n\n{visible_text.strip()}")
     buffer = io.BytesIO()
     out.save(buffer)
-    return buffer.getvalue(), "\n\n".join(markdown) + "\n"
+    return _undated(buffer.getvalue()), "\n\n".join(markdown) + "\n"
+
+
+# PDFium stamps the time of saving. On a redacted copy that is when the user redacted it,
+# which the file does not need to say. The replacement has the same length, so every byte
+# offset in the cross-reference table stays valid.
+_CREATION_DATE = re.compile(rb"/CreationDate\(D:\d{14}")
+_FIXED_DATE = b"/CreationDate(D:19700101000000"
+
+
+def _undated(pdf: bytes) -> bytes:
+    return _CREATION_DATE.sub(_FIXED_DATE, pdf, count=1)
 
 
 def _append_page(doc, image, width: float, height: float) -> None:
