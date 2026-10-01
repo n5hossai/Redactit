@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -128,6 +129,9 @@ class AuditLog:
 
     def __init__(self, path: Path) -> None:
         self._path = path
+        # The native host writes from more than one thread, and two appends racing on one
+        # file can overwrite each other's line on Windows.
+        self._lock = threading.Lock()
         path.parent.mkdir(parents=True, exist_ok=True)
 
     def write(self, event: str, **fields: Any) -> None:
@@ -146,5 +150,5 @@ class AuditLog:
                 raise ValueError(f"{event}: invalid value for field {name!r}")
 
         record = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"), "event": event, **fields}
-        with self._path.open("a", encoding="utf-8") as fh:
+        with self._lock, self._path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
