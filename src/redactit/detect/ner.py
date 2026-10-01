@@ -7,6 +7,7 @@ import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
 
+from redactit.cores import physical_cores
 from redactit.policy import MODEL_FLOOR as FLOOR  # lowest threshold any dial uses
 from redactit.types import Span
 
@@ -26,7 +27,11 @@ PROMPT = [t for label in LABELS for t in ("<<ENT>>", label)] + ["<<SEP>>"]
 
 class GlinerNer:
     def __init__(self, model: Path, tokenizer: Path):
-        self.session = ort.InferenceSession(str(model), providers=["CPUExecutionProvider"])
+        options = ort.SessionOptions()
+        # One thread per physical core: 8 threads was fastest on an 8-core, 16-thread laptop,
+        # and 16 doubled the time (cores.py). Scores were identical at every count from 1 to 16.
+        options.intra_op_num_threads = physical_cores()
+        self.session = ort.InferenceSession(str(model), options, providers=["CPUExecutionProvider"])
         self.tok = Tokenizer.from_file(str(tokenizer))
         self.tok.no_truncation()  # silently dropping words would silently drop entities
         self.types = list(LABELS.values())
