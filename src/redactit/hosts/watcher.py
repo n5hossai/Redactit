@@ -16,8 +16,9 @@ gets the same output names. The rules:
   as "<person> passport.png" is sensitive on its own, and logs outlive the run.
 - Only the inbox's top level is watched; hidden files and Word's "~$" lock files are not
   documents and are passed over.
-- A symlink or reparse point is logged as skipped and never followed, so nothing outside
-  the inbox is read through one, and the file read must be the one that settled.
+- A symlink, junction or mount point is logged as skipped and never followed, so nothing
+  outside the inbox is read through one, and the file read must be the one that settled.
+  Other reparse points, such as OneDrive placeholders, are read as ordinary files.
 """
 
 from __future__ import annotations
@@ -77,18 +78,25 @@ def _describe(name: str) -> str:
 
 
 _REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+_NAME_SURROGATE = 0x20000000  # IsReparseTagNameSurrogate: the reparse point names another path
 # Read-only, in binary mode on Windows. O_NOFOLLOW refuses a symlink swapped in after the
 # lstat, where the OS has it; O_NONBLOCK keeps a FIFO swapped in from hanging the open.
 _OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 
 
 def _is_link(st) -> bool:
-    """A symlink, or on Windows any reparse point (a symlink, a junction or another kind).
+    """A symlink, or on Windows a reparse point that names another path: a symlink, a
+    junction or a mount point. Following one would read a file that was never dropped into
+    the inbox, such as one from elsewhere on the disk the user did not mean to redact.
 
-    Following one would read a file that was never dropped into the inbox, such as one
-    from elsewhere on the disk that the user did not mean to redact.
+    Other reparse points are files with content of their own and are read. OneDrive's
+    Files-On-Demand placeholders carry one, and Desktop and Documents are often inside
+    OneDrive; reading a placeholder makes the sync client fetch it, not this process.
     """
-    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & _REPARSE_POINT)
+    if stat.S_ISLNK(st.st_mode):  # what os.path.islink reports, taken from the same lstat
+        return True
+    attributes, tag = getattr(st, "st_file_attributes", 0), getattr(st, "st_reparse_tag", 0)
+    return bool(attributes & _REPARSE_POINT and tag & _NAME_SURROGATE)
 
 
 def _fingerprint(st: os.stat_result) -> tuple[int, int, int, int]:
@@ -272,7 +280,7 @@ class Watcher:
             self._done[path] = fingerprint
             return
         if _is_link(st):
-            self.log(f"skipped {what}: it is a link or reparse point, which is not followed")
+            self.log(f"skipped {what}: it is a link, which is not followed")
             self._done[path] = fingerprint
             return
         if Path(name).suffix.lower() not in SUFFIXES:

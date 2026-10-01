@@ -224,7 +224,7 @@ def test_ctrl_c_in_the_middle_of_a_write_leaves_nothing_behind(boxes, monkeypatc
     assert (inbox / "notes.txt").read_bytes() == b"original"
 
 
-LINK_SKIPPED = "skipped a .txt file: it is a link or reparse point, which is not followed"
+LINK_SKIPPED = "skipped a .txt file: it is a link, which is not followed"
 
 
 def test_a_symlink_out_of_the_inbox_is_not_followed(boxes):
@@ -242,36 +242,64 @@ def test_a_symlink_out_of_the_inbox_is_not_followed(boxes):
     assert rec.calls == [] and list(outbox.iterdir()) == []
 
 
-def test_link_or_reparse_point_decision():
+SYMLINK, MOUNT_POINT, CLOUD_6 = 0xA000000C, 0xA0000003, 0x9000601A  # IO_REPARSE_TAG_* values
+
+
+def test_link_decision():
     """The decision behind the test above, with stat results stood in, so it runs where no
-    symlink can be made: Windows junctions and other reparse points count too."""
-    regular = stat.S_IFREG | 0o600
-    assert not watcher._is_link(SimpleNamespace(st_mode=regular))
-    assert not watcher._is_link(SimpleNamespace(st_mode=regular, st_file_attributes=0x20))  # archive bit only
+    symlink can be made. A reparse point is a link only when its tag names another path."""
+    regular, reparse = stat.S_IFREG | 0o600, 0x400 | 0x20
+
+    def st(**fields):
+        return SimpleNamespace(st_mode=regular, **fields)
+
+    assert not watcher._is_link(st())
+    assert not watcher._is_link(st(st_file_attributes=0x20, st_reparse_tag=0))  # archive bit only
     assert watcher._is_link(SimpleNamespace(st_mode=stat.S_IFLNK | 0o777))
-    assert watcher._is_link(SimpleNamespace(st_mode=regular, st_file_attributes=0x400 | 0x20))  # reparse point
+    assert watcher._is_link(st(st_file_attributes=reparse, st_reparse_tag=SYMLINK))
+    assert watcher._is_link(st(st_file_attributes=reparse, st_reparse_tag=MOUNT_POINT))  # a junction
+    assert not watcher._is_link(st(st_file_attributes=reparse, st_reparse_tag=CLOUD_6))  # a OneDrive placeholder
+    assert not watcher._is_link(st(st_file_attributes=0x20, st_reparse_tag=SYMLINK))  # a tag without the attribute
 
 
-def test_a_reparse_point_in_the_inbox_is_skipped_unread(boxes, monkeypatch):
+def _reparse_point(monkeypatch, name: str, tag: int) -> list:
+    """Make the inbox entry `name` report itself as a reparse point with `tag`; returns
+    the paths the watcher opens."""
+    real_lstat, real_open, opened = os.lstat, os.open, []
+
+    def lstat(path, *args, **kwargs):
+        st = real_lstat(path, *args, **kwargs)
+        if os.path.basename(path) != name:
+            return st
+        fields = {k: getattr(st, k) for k in dir(st) if k.startswith("st_")}
+        return SimpleNamespace(**{**fields, "st_file_attributes": 0x400, "st_reparse_tag": tag})
+
+    monkeypatch.setattr(watcher.os, "lstat", lstat)
+    monkeypatch.setattr(watcher.os, "open", lambda path, *a, **k: opened.append(path) or real_open(path, *a, **k))
+    return opened
+
+
+@pytest.mark.parametrize("tag", [SYMLINK, MOUNT_POINT], ids=["symlink", "mount point"])
+def test_a_reparse_point_naming_another_path_is_skipped_unread(boxes, monkeypatch, tag):
     inbox, outbox = boxes
     inbox.mkdir()
     (inbox / "link.txt").write_bytes(b"what a link would lead to")
-    real_lstat, opened = os.lstat, []
-
-    def lstat(path, *args, **kwargs):  # the inbox entry reports itself as a reparse point
-        st = real_lstat(path, *args, **kwargs)
-        if os.path.basename(path) != "link.txt":
-            return st
-        fields = {k: getattr(st, k) for k in dir(st) if k.startswith("st_")}
-        return SimpleNamespace(**{**fields, "st_file_attributes": 0x400})
-
-    real_open = os.open
-    monkeypatch.setattr(watcher.os, "lstat", lstat)
-    monkeypatch.setattr(watcher.os, "open", lambda path, *a, **k: opened.append(path) or real_open(path, *a, **k))
+    opened = _reparse_point(monkeypatch, "link.txt", tag)
     rec = Recorder()
     with running(inbox, outbox, rec) as (_, log):
         wait_for(lambda: LINK_SKIPPED in log)
     assert rec.calls == [] and not [p for p in opened if os.path.basename(p) == "link.txt"]
+
+
+def test_a_cloud_placeholder_is_read_like_any_file(boxes, monkeypatch):
+    inbox, outbox = boxes
+    inbox.mkdir()
+    (inbox / "notes.txt").write_bytes(b"synced from the cloud")
+    _reparse_point(monkeypatch, "notes.txt", CLOUD_6)
+    rec = Recorder()
+    with running(inbox, outbox, rec) as (_, log):
+        wait_for(lambda: (outbox / "notes.txt").exists())
+    assert rec.calls == [("notes.txt", b"synced from the cloud")] and LINK_SKIPPED not in log
 
 
 def test_a_file_swapped_after_it_settled_is_not_read(boxes, monkeypatch):
