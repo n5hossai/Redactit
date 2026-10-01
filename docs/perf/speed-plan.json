@@ -1,0 +1,28 @@
+{
+ "note": "Effect of the proposed speed decisions and how other machines compare. 'measured' values were timed on the benchmark machine; 'estimated' and 'projected' values are not measurements. See speed-plan.md.",
+ "impact": [
+  {"label": "First paste, host just started", "before_s": 6.7, "after_s": 0.72, "basis": "measured", "decision": 1},
+  {"label": "Paste, 2 KB", "before_s": 0.62, "after_s": 0.5, "basis": "estimated", "decision": 3},
+  {"label": "Paste, 20 KB", "before_s": 6.8, "after_s": 5.3, "basis": "estimated", "decision": 3},
+  {"label": "New 1280 x 720 screenshot, OCR", "before_s": 7.5, "after_s": 4.3, "basis": "measured", "decision": 2},
+  {"label": "New 1920 x 1080 screenshot, OCR", "before_s": 13.2, "after_s": 7.7, "basis": "measured", "decision": 2},
+  {"label": "Cold start to a loaded engine", "before_s": 6.1, "after_s": 4.75, "basis": "estimated", "decision": 4}
+ ],
+ "devices": [
+  {"label": "This machine (Ryzen 7 7840HS)", "geekbench6_multi": 11871, "basis": "measured", "paste_2kb_s": 0.65, "screenshot_1080p_s": 9.6, "pdf_page_s": 11.7, "ram": "15 GB: fine"},
+  {"label": "Apple M2", "geekbench6_multi": 10062, "basis": "projected", "paste_2kb_s": 0.8, "screenshot_1080p_s": 11, "pdf_page_s": 14, "ram": "fine"},
+  {"label": "Mid-range laptop (Ryzen 5 7530U)", "geekbench6_multi": 5679, "basis": "projected", "paste_2kb_s": 1.4, "screenshot_1080p_s": 20, "pdf_page_s": 25, "ram": "fine"},
+  {"label": "Budget laptop (Core i5-1135G7)", "geekbench6_multi": 5373, "basis": "projected", "paste_2kb_s": 1.4, "screenshot_1080p_s": 21, "pdf_page_s": 26, "ram": "8 GB: tight"}
+ ],
+ "threads_measured": {
+  "machine": "Ryzen 7 7840HS",
+  "threads": [8, 4, 2, 1],
+  "paste_2kb_s": [0.65, 0.75, null, 1.7],
+  "screenshot_1080p_s": [9.6, 10.7, 12.8, 15.7],
+  "pdf_page_s": [11.7, 12.6, 15.9, 20.0]
+ },
+ "sources": {
+  "geekbench": "https://browser.geekbench.com/processors/amd-ryzen-7-7840hs",
+  "phone_cpu": "https://www.cpu-monkey.com/en/benchmark-qualcomm_snapdragon_7s_gen_2-geekbench_6_multi_core"
+ }
+}
