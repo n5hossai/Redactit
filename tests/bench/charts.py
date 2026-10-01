@@ -304,12 +304,74 @@ def sizes(report: dict, out: Path) -> None:
         svg.save(out / name)
 
 
+def _log_axis(svg: Svg, left: float, right: float, top: float, bottom: float, lo: float, hi: float):
+    """Time bands and ticks on a log scale shared by the plan charts; returns the x mapping."""
+    x = lambda s: left + (math.log10(s) - math.log10(lo)) / (math.log10(hi) - math.log10(lo)) * (right - left)  # noqa: E731
+    for a, b, fill in ((lo, 1, "band"), (1, 10, "band2"), (10, hi, "band")):
+        svg.add(f'<rect x="{x(a):.1f}" y="{top}" width="{x(b) - x(a):.1f}" height="{bottom - top}" fill="var(--{fill})"/>')
+    for t, label in ((0.3, "0.3 s"), (1, "1 s"), (3, "3 s"), (10, "10 s"), (30, "30 s")):
+        if lo <= t <= hi:
+            svg.line(x(t), top, x(t), bottom, "grid")
+            svg.text(x(t), bottom + 16, label, "m", "middle")
+    return x
+
+
+def impact(plan: dict, out: Path) -> None:
+    """Today against the time each decision should give, per case; measured or estimated."""
+    rows = plan["impact"]
+    top, row_h, left, right = 84, 30, 250, W - 190
+    height = top + len(rows) * row_h + 40
+    svg = Svg(height, "What the proposed decisions change", "Time today and with the decision, per case.")
+    svg.text(20, 30, "What the proposed decisions change", "h")
+    svg.text(20, 50, "Ring: today. Dot: with the decision. Log scale; the tag says whether it was measured", "sub")
+    x = _log_axis(svg, left, right, top - 8, top + len(rows) * row_h, 0.3, 20)
+    for i, r in enumerate(rows):
+        cy = top + i * row_h + row_h / 2 - 4
+        svg.text(20, cy + 4, r["label"])
+        svg.line(x(r["after_s"]), cy, x(r["before_s"]), cy, "axis", 2)
+        svg.dot(x(r["before_s"]), cy, "s2", hollow=True)
+        svg.dot(x(r["after_s"]), cy, "s1")
+        svg.text(right + 10, cy + 4, f"{secs(r['before_s'])} → {secs(r['after_s'])}", "v")
+        svg.text(W - 20, cy + 4, r["basis"], "m", "end")
+    svg.save(out / "impact.svg")
+
+
+def devices(plan: dict, out: Path) -> None:
+    """Three everyday cases on other machines: measured here, projected elsewhere (hollow)."""
+    rows, series = plan["devices"], [("paste_2kb_s", "Paste, 2 KB", "s1"),
+                                     ("screenshot_1080p_s", "Screenshot, 1080p", "s2"),
+                                     ("pdf_page_s", "PDF page", "s3")]
+    top, row_h, left, right = 96, 30, 250, W - 30
+    height = top + len(rows) * row_h + 40
+    svg = Svg(height, "The same cases on other machines",
+              "Seconds per case: measured on this machine, projected for others by CPU score.")
+    svg.text(20, 30, "The same cases on other machines", "h")
+    svg.text(20, 50, "Filled: measured. Hollow: projected from Geekbench 6 multi-core score, not measured", "sub")
+    lx = 20
+    for _, label, colour in series:
+        svg.dot(lx + 5, 70, colour)
+        svg.text(lx + 15, 74, label, "sub")
+        lx += 20 + text_width(label) + 24
+    x = _log_axis(svg, left, right, top - 8, top + len(rows) * row_h, 0.3, 40)
+    for i, r in enumerate(rows):
+        cy = top + i * row_h + row_h / 2 - 4
+        svg.text(20, cy + 4, r["label"])
+        for key, _, colour in series:
+            svg.dot(x(r[key]), cy, colour, hollow=r["basis"] != "measured")
+    svg.save(out / "devices.svg")
+
+
 def main() -> None:
     report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     out = Path(sys.argv[2])
     out.mkdir(parents=True, exist_ok=True)
     for chart in (speed, stages, cold_start, scaling, sizes):
         chart(report, out)
+    plan = Path(sys.argv[1]).with_name("speed-plan.json")
+    if plan.exists():  # the proposed decisions and the device comparison, when written
+        data = json.loads(plan.read_text(encoding="utf-8"))
+        impact(data, out)
+        devices(data, out)
     print(sorted(p.name for p in out.glob("*.svg")))
 
 
