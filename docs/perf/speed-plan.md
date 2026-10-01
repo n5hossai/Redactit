@@ -60,14 +60,16 @@ all formats, dial 3, 168 values each).
 - **Rejected, INT8:** it is 2.27× faster, but 49 of 300 names and 40 of 150 addresses fell below the dial-3 threshold (median name score 0.742 → 0.603).
 - **Rejected, the vendor's lighter model:** F1 75.5% against 80.99%.
 - **Taken:** only changes with identical output:
-  - threads set to the physical core count (8 threads is fastest; 16 doubles the time);
-  - two windows in flight;
-  - the slim spaCy engine (identical spans, pattern stage 17-28% faster).
-- **Fix in Phase 4:** Presidio's de-duplication and context passes grow faster than the text (about 6 s at 200 KB, near 0 at 20 KB). The address pattern itself is linear (about 24 ms per KB). Add a timing test:
-  - the address recognizer takes 1.0 s or less on 200 KB;
-  - the 200 KB / 20 KB time ratio stays at 12× or less;
-  - an adversarial input of long digit-and-comma runs passes.
-- **Large pastes stay slow:** about 5 s at 20 KB. They need a progress state, and the owner may set a size cap.
+  - threads set to the physical core count (8 threads is fastest; 16 doubles the time). Built in Phase 4, for OCR too;
+  - two windows in flight. Not built yet: two windows at 8 threads each would share 8 cores, so it needs its own measurement;
+  - the slim spaCy engine (identical spans, pattern stage 17-28% faster). Built in Phase 4, with downloads off.
+- **Fixed in Phase 4:** the pattern stage took 36 s on 200 KB against 1.2 s on 20 KB. It now takes about 3 s, 90% of it spaCy, with identical output (details in [the Phase 4 leak report](../leak-reports/phase-4-speed.md)):
+  - Presidio's de-duplication compared every match with every kept one: 6.7 s, now 0.02 s;
+  - its context pass scanned every token for each match: 12.6 s, now 0.14 s;
+  - the postcode and ZIP address rules backtracked from every character: 7 s, now 0.04 s. They were linear, so the 1.0 s target needed this too.
+
+  Timing tests now hold the address rules to 1.0 s on 200 KB, the 200 KB / 20 KB ratio to 12× (9-11× measured), and 200 KB of digit-and-comma runs to bounded time.
+- **Large pastes stay slow:** about 5 s at 20 KB, almost all of it the name model. They need a progress state, and the owner may set a size cap.
 
 ### 4. Model verification
 
