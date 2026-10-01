@@ -65,6 +65,58 @@ Core types (in `types.py`):
 - `Decision`: a `Span` plus `action`, `policy_rule_id`, and `reason`. The reason is built
   from the rule, detector, score and dial. It never contains matched text.
 
+### 2.1 Folder watcher and clipboard shortcut
+
+**`redactit watch`** (`hosts/watcher.py`) redacts every file dropped into an inbox into an
+outbox, through the same per-file code and output names as `redactit redact`
+(`cli.redact_file`). One engine, with text and OCR warmed, serves the whole run.
+
+- Folders default to `inbox/` and `outbox/` in the user data folder. Only `--inbox` and
+  `--outbox` move them, never the environment, and the outbox may not be the inbox. New
+  folders are created private. Only the inbox's top level is watched.
+- The inbox is only read. A file is read once its size and mtime have held for 2 s, so a
+  file still being copied is not redacted half-written.
+- Each version of a file is redacted once. While running, a fingerprint (file ID, size,
+  mtime) tells a real change from a read. At start-up, a file whose outputs are all newer
+  than it is skipped; "newer" also counts creation time (Windows) or inode change time,
+  because a copy keeps the old mtime.
+- Outputs are staged in a private folder inside the outbox and renamed into place, and
+  the folder is removed however the watcher stops (THREAT_MODEL T11).
+- Each file gets its own pseudonym scope unless `--scope` links them: a watcher runs for
+  days, and its files go to different chats.
+- A bad file logs its type and a reason, never its name or content, and is not retried
+  until it changes. At most 64 MiB per file, as from the extension.
+- Outputs are never deleted: how long they stay is open (§12).
+
+**`redactit clip`** (`hosts/clipboard.py`) runs once per keypress and never monitors.
+It reads the clipboard's text, leaves an item a password manager marked concealed
+untouched (without reading its text), redacts the text, and writes it back as plain
+text only. The copying program's HTML and RTF copies were not checked, so they are
+dropped. It prints one line of counts. Exit status: 0 written back; 3 nothing to redact
+(no text, or concealed); 1 failed. In both non-zero cases the clipboard is untouched,
+including when it changed while the engine ran.
+
+| OS | Concealed when | Read through |
+|---|---|---|
+| Windows | `ExcludeClipboardContentFromMonitorProcessing` or `Clipboard Viewer Ignore` is present, or `CanIncludeInClipboardHistory` is 0 | `ctypes` (Win32) |
+| macOS | `org.nspasteboard.ConcealedType` is present | `pyobjc-framework-Cocoa` (NSPasteboard) |
+| Linux | `x-kde-passwordManagerHint` is `secret`. GNOME and some Wayland compositors set nothing (THREAT_MODEL §5) | `wl-paste`/`wl-copy`, else `xclip`, as separate programs |
+
+**Shortcut binding** (done by the Phase 7 installers). The shortcut runs `redactit clip`
+through the same kind of launcher as the native host (§7), with no console window:
+
+- **Windows:** a Start-menu shortcut (`.lnk`) with a hotkey such as Ctrl+Alt+R.
+- **macOS:** a Quick Action that runs the launcher. The user assigns its key once in
+  System Settings > Keyboard > Keyboard Shortcuts > Services; no supported API lets an
+  installer do it (THREAT_MODEL §5). Phase 7 also checks whether macOS asks before a
+  background process reads the pasteboard.
+- **Linux:** a custom shortcut, set with `gsettings` on GNOME or `kwriteconfig` on KDE;
+  elsewhere the installer prints the command to bind.
+
+A shortcut has no terminal, so Phase 7 also decides how the one-line result is shown
+(for example, a notification driven by the exit status). Each press starts a new process
+and pays the full cold start, about 6 s (§10, risk 13).
+
 ## 3. Stack
 
 Runtime dependencies must be MIT, Apache-2.0 or BSD. Exceptions are listed in section 8.
@@ -86,7 +138,7 @@ Runtime dependencies must be MIT, Apache-2.0 or BSD. Exceptions are listed in se
 | Policy | `PyYAML` `safe_load` + `pydantic` | MIT | Typed, validated config with clear errors. |
 | CLI | `argparse` | PSF | Standard library, one less dependency. |
 | Folder watcher | `watchdog` | Apache-2.0 | Cross-platform file events. |
-| Clipboard | `ctypes` (Windows), `pyobjc` (macOS), `wl-paste`/`xclip` (Linux) | PSF / MIT / external process | Reads the "concealed" markers that password managers set. |
+| Clipboard | `ctypes` (Windows), `pyobjc-framework-Cocoa` (macOS only, by an environment marker), `wl-paste`/`xclip` (Linux) | PSF / MIT / external process | Reads the "concealed" markers that password managers set. |
 | Tests | `pytest`, `pytest-socket`, `Faker` | MIT | `pytest-socket` makes any network call fail the test. |
 | Test corpus | `reportlab` (digital PDFs), `Faker` | BSD / MIT | Builds the synthetic corpus. Test-only. The verifier reuses the runtime PDF, OCR, barcode and face libraries with its own settings. |
 | Build backend | `hatchling` | MIT | Standard PEP 517 backend for `uv`. |
@@ -169,6 +221,8 @@ Redactit/
 │  ├─ unit/                  # per module
 │  ├─ test_offline.py        # engine run with sockets disabled
 │  ├─ test_host.py           # native host round trips in Chrome's frames (hostkit.py starts it)
+│  ├─ test_watch.py          # folder watcher round trip; `redactit watch` stopped from the keyboard
+│  ├─ test_clip.py           # `redactit clip` on the real clipboard (skipped without one)
 │  ├─ test_licenses.py       # fails on any non-permissive dependency
 │  └─ test_leak_harness.py   # harness must see every value on unredacted input
 ├─ docs/
@@ -266,7 +320,10 @@ are committed.
   exception type enforce it; the leak test also scans logs and the audit file.
 - No telemetry of any kind.
 - Temporary files go in a private directory (`0700` on POSIX, user-only ACL on Windows),
-  deleted in `finally`. In-memory processing is the default.
+  deleted in `finally`. In-memory processing is the default. The folder watcher is the
+  only writer of temporary files: its private folder sits inside the outbox, so the final
+  rename stays on one volume and is atomic. On Windows that ACL needs Python 3.12.4 or
+  later, which the watcher checks.
 - Models are downloaded once by `redactit setup-models`, pinned by SHA-256, and verified at
   every load, with no hash cache. RapidOCR's three ONNX files ship inside its package and
   are pinned too; setup checks them and never downloads them. The hash runs in a thread
@@ -343,6 +400,7 @@ floor. Precision is reported, not gated.
 | 10 | Slow redaction breaks the chat flow (measured: 6.1 s cold start, about 11 s per PDF page, 9.5 s per 1080p screenshot) | Warm host, faster OCR and visible progress; see docs/perf/speed-plan.md (approved) |
 | 11 | OS keychain unavailable (headless Linux) | Fail closed with a clear setup message |
 | 12 | Face test images must be synthetic and license-clean | Public-domain AI-generated portraits; sources in `tests/fixtures/faces/SOURCES.md` |
+| 13 | Every clipboard shortcut press pays the full cold start (about 6 s), because `redactit clip` is a new process that loads and verifies the models each time | Accepted for now and documented in §2.1. A later phase lets `clip` hand its text to an engine that is already running instead of loading its own. Not built yet. |
 
 ## 11. Delivery
 
@@ -372,4 +430,8 @@ change is visual, and the leak report attached. Nothing merges without owner app
 
 ## 12. Open questions
 
-None open. Face fixtures were settled in Phase 3 (risk 12).
+Face fixtures were settled in Phase 3 (risk 12).
+
+- **Outbox retention.** How long should the folder watcher's redacted copies stay in the
+  outbox? Until the owner decides, nothing is deleted. `OUTBOX_RETENTION_DAYS = None` in
+  `hosts/watcher.py` is where the chosen value goes.

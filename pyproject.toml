@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Local-first redaction of sensitive data before it reaches an LLM."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12.4,<3.13"
 # Engine dependencies are added alongside the code that uses them.
 dependencies = [
     "cryptography==50.0.1",
@@ -17,11 +17,13 @@ dependencies = [
     "platformdirs==4.12.0",
     "presidio-analyzer==2.2.364",
     "pydantic==2.13.5",
+    "pyobjc-framework-cocoa==12.2.2 ; sys_platform == 'darwin'",
     "pypdfium2==5.13.0",
     "pyyaml==6.0.3",
     "rapidocr-onnxruntime==1.4.4",
     "spacy==3.8.16",
     "tokenizers==0.23.2",
+    "watchdog==6.0.0",
     "zxing-cpp==3.1.1",
 ]
 
