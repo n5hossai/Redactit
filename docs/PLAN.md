@@ -94,7 +94,9 @@ untouched (without reading its text), redacts the text, and writes it back as pl
 text only. The copying program's HTML and RTF copies were not checked, so they are
 dropped. It prints one line of counts. Exit status: 0 written back; 3 nothing to redact
 (no text, or concealed); 1 failed. In both non-zero cases the clipboard is untouched,
-including when it changed while the engine ran.
+including when it changed while the engine ran, with one exception: Windows and macOS
+must clear the clipboard before writing to it, so a write that fails after the clear
+leaves it empty. It never holds the unredacted text after a failed run.
 
 | OS | Concealed when | Read through |
 |---|---|---|

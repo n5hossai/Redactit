@@ -215,7 +215,8 @@ def main(argv: list[str] | None = None) -> int:
 
     clip = sub.add_parser("clip", help="redact the clipboard's text in place, once (an OS shortcut runs this)",
                           epilog="exit status: 0 written back, 3 nothing to redact (no text, or concealed), "
-                                 "1 failed; unless 0, the clipboard is untouched")
+                                 "1 failed; unless 0, the clipboard is untouched, except that a write "
+                                 "failing after the clear (Windows, macOS) leaves it empty")
     clip.add_argument("--policy", type=Path, help="policy file (default: user policy if present)")
     clip.add_argument("--scope", help="reuse pseudonyms across runs that share this name")
     clip.set_defaults(run=_clip)

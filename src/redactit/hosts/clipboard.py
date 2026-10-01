@@ -6,7 +6,10 @@ write the result back. One line goes to stderr, with counts and entity types onl
 
 Exit status: 0 when the redacted text was written back; 3 when there was nothing to
 redact (no text, or a concealed item); 1 when anything failed. Unless it is 0, the
-clipboard was not touched.
+clipboard was not touched, with one exception: Windows and macOS must clear the
+clipboard before writing to it, so a write that fails after the clear leaves it empty.
+It is not refilled with the original, which the same failing write would have to put
+back; empty is the fail-closed state, since nothing unredacted can be pasted from it.
 
 Fail closed. Nothing is written until the whole text is redacted, and nothing is written
 if the clipboard changed while the engine ran: the user copied something else, which the

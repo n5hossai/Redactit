@@ -316,6 +316,24 @@ def test_linux_refuses_text_read_after_the_concealment_check_went_stale(session,
         board.read()
 
 
+def test_a_write_that_fails_after_clearing_leaves_the_clipboard_empty():
+    """Windows and macOS must clear the clipboard before writing to it. If the write then
+    fails, the clipboard is left empty: never holding the unredacted text."""
+    board, fake = windows({CF_UNICODETEXT: utf16(TEXT), "HTML Format": b"<b>Priya</b>"})
+    item = board.read()
+    fake.SetClipboardData = lambda _fmt, _handle: 0
+    with pytest.raises(ClipboardError, match="now empty"):
+        board.write("Call [PERSON_1].", item.version)
+    assert fake.board == {} and fake.ours == set() and not fake.is_open
+    pasteboard = FakePasteboard({PLAIN: TEXT})
+    mac = MacOS(pasteboard)
+    item = mac.read()
+    pasteboard.setString_forType_ = lambda _text, _kind: False
+    with pytest.raises(ClipboardError, match="now empty"):
+        mac.write("Call [PERSON_1].", item.version)
+    assert pasteboard.items == {}
+
+
 def test_linux_without_a_clipboard_tool_fails_with_a_hint():
     with pytest.raises(ClipboardError, match="wl-clipboard"):
         Linux(run=None, which=lambda _name: None, environ={"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"})
