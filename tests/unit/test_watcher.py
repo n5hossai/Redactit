@@ -313,11 +313,14 @@ def test_a_file_swapped_after_it_settled_is_not_read(boxes, monkeypatch):
 
     def fstat(fd):
         st = real_fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return st  # folders as they are: on POSIX, shutil.rmtree checks its own with fstat
         fields = {k: getattr(st, k) for k in dir(st) if k.startswith("st_")}
         return SimpleNamespace(**{**fields, "st_ino": st.st_ino + 1})  # always another file
 
     def opener(path, mode, *args, **kwargs):
-        flags.append(mode)
+        if os.path.basename(path) == "notes.txt":  # the watcher's opens, not rmtree's
+            flags.append(mode)
         return real_open(path, mode, *args, **kwargs)
 
     monkeypatch.setattr(watcher.os, "fstat", fstat)
