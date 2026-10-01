@@ -223,6 +223,84 @@ def test_ctrl_c_in_the_middle_of_a_write_leaves_nothing_behind(boxes, monkeypatc
     assert (inbox / "notes.txt").read_bytes() == b"original"
 
 
+LINK_SKIPPED = "skipped a .txt file: it is a link or reparse point, which is not followed"
+
+
+def test_a_symlink_out_of_the_inbox_is_not_followed(boxes):
+    inbox, outbox = boxes
+    inbox.mkdir()
+    outside = inbox.parent / "elsewhere.txt"
+    outside.write_bytes(b"a file outside the inbox")
+    try:
+        os.symlink(outside, inbox / "link.txt")
+    except OSError:  # Windows needs Developer Mode or an elevated process for this
+        pytest.skip("symlinks cannot be created here")
+    rec = Recorder()
+    with running(inbox, outbox, rec) as (_, log):
+        wait_for(lambda: LINK_SKIPPED in log)
+    assert rec.calls == [] and list(outbox.iterdir()) == []
+
+
+def test_link_or_reparse_point_decision():
+    """The decision behind the test above, with stat results stood in, so it runs where no
+    symlink can be made: Windows junctions and other reparse points count too."""
+    regular = stat.S_IFREG | 0o600
+    assert not watcher._is_link(SimpleNamespace(st_mode=regular))
+    assert not watcher._is_link(SimpleNamespace(st_mode=regular, st_file_attributes=0x20))  # archive bit only
+    assert watcher._is_link(SimpleNamespace(st_mode=stat.S_IFLNK | 0o777))
+    assert watcher._is_link(SimpleNamespace(st_mode=regular, st_file_attributes=0x400 | 0x20))  # reparse point
+
+
+def test_a_reparse_point_in_the_inbox_is_skipped_unread(boxes, monkeypatch):
+    inbox, outbox = boxes
+    inbox.mkdir()
+    (inbox / "link.txt").write_bytes(b"what a link would lead to")
+    real_lstat, opened = os.lstat, []
+
+    def lstat(path, *args, **kwargs):  # the inbox entry reports itself as a reparse point
+        st = real_lstat(path, *args, **kwargs)
+        if os.path.basename(path) != "link.txt":
+            return st
+        fields = {k: getattr(st, k) for k in dir(st) if k.startswith("st_")}
+        return SimpleNamespace(**{**fields, "st_file_attributes": 0x400})
+
+    real_open = os.open
+    monkeypatch.setattr(watcher.os, "lstat", lstat)
+    monkeypatch.setattr(watcher.os, "open", lambda path, *a, **k: opened.append(path) or real_open(path, *a, **k))
+    rec = Recorder()
+    with running(inbox, outbox, rec) as (_, log):
+        wait_for(lambda: LINK_SKIPPED in log)
+    assert rec.calls == [] and not [p for p in opened if os.path.basename(p) == "link.txt"]
+
+
+def test_a_file_swapped_after_it_settled_is_not_read(boxes, monkeypatch):
+    """The opened file's ID must match the version that settled; a link or another file
+    put in its place meanwhile has another one. Opened without following a final symlink
+    where the OS can refuse one."""
+    inbox, outbox = boxes
+    inbox.mkdir()
+    (inbox / "notes.txt").write_bytes(b"original")
+    real_open, real_fstat, flags = os.open, os.fstat, []
+
+    def fstat(fd):
+        st = real_fstat(fd)
+        fields = {k: getattr(st, k) for k in dir(st) if k.startswith("st_")}
+        return SimpleNamespace(**{**fields, "st_ino": st.st_ino + 1})  # always another file
+
+    def opener(path, mode, *args, **kwargs):
+        flags.append(mode)
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(watcher.os, "fstat", fstat)
+    monkeypatch.setattr(watcher.os, "open", opener)
+    rec = Recorder()
+    with running(inbox, outbox, rec):
+        wait_for(lambda: len(flags) >= 2)  # opened, refused, settled again and opened again
+    assert rec.calls == [] and list(outbox.iterdir()) == []
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    assert all(f & (os.O_WRONLY | os.O_RDWR) == 0 and f & nofollow == nofollow for f in flags)
+
+
 class FakeEngine:
     def redact(self, text, scope, **_kwargs):
         return SimpleNamespace(text=text.replace("Priya Okafor", "[PERSON_1]"))

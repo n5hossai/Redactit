@@ -16,6 +16,8 @@ gets the same output names. The rules:
   as "<person> passport.png" is sensitive on its own, and logs outlive the run.
 - Only the inbox's top level is watched; hidden files and Word's "~$" lock files are not
   documents and are passed over.
+- A symlink or reparse point is logged as skipped and never followed, so nothing outside
+  the inbox is read through one, and the file read must be the one that settled.
 """
 
 from __future__ import annotations
@@ -72,6 +74,21 @@ def _describe(name: str) -> str:
     """"a .pdf file", or a neutral phrase: an unknown suffix could itself be a value."""
     suffix = Path(name).suffix.lower()
     return f"a {suffix} file" if suffix in SUFFIXES else "a file of an unsupported type"
+
+
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+# Read-only, in binary mode on Windows. O_NOFOLLOW refuses a symlink swapped in after the
+# lstat, where the OS has it; O_NONBLOCK keeps a FIFO swapped in from hanging the open.
+_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+
+
+def _is_link(st) -> bool:
+    """A symlink, or on Windows any reparse point (a symlink, a junction or another kind).
+
+    Following one would read a file that was never dropped into the inbox, such as one
+    from elsewhere on the disk that the user did not mean to redact.
+    """
+    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & _REPARSE_POINT)
 
 
 def _fingerprint(st: os.stat_result) -> tuple[int, int, int, int]:
@@ -194,10 +211,10 @@ class Watcher:
         for entry in os.scandir(self.inbox):
             path = Path(entry.path)
             try:
-                st = path.stat()  # os.stat, not entry.stat(): only it has the file ID on Windows
+                st = os.lstat(path)  # not entry.stat(), which lacks the file ID on Windows; never follows a link
             except OSError:
                 continue
-            if stat.S_ISREG(st.st_mode) and self._outputs_newer(path.name, st):
+            if stat.S_ISREG(st.st_mode) and not _is_link(st) and self._outputs_newer(path.name, st):
                 self._done[path] = _fingerprint(st)
             else:
                 self.saw(path)
@@ -220,13 +237,13 @@ class Watcher:
             pending = list(self._pending)
         for path in pending:
             try:
-                st = path.stat()
+                st = os.lstat(path)  # the entry itself: a link is reported and skipped, never followed
             except FileNotFoundError:
                 self.gone(path)
                 continue
             except OSError:
                 continue  # not statable right now; the next poll tries again
-            if not stat.S_ISREG(st.st_mode):
+            if not (stat.S_ISREG(st.st_mode) or _is_link(st)):  # folders, devices: passed over
                 with self._lock:
                     self._pending.pop(path, None)
                 continue
@@ -251,6 +268,10 @@ class Watcher:
         if name.startswith((".", "~$")):
             self._done[path] = fingerprint
             return
+        if _is_link(st):
+            self.log(f"skipped {what}: it is a link or reparse point, which is not followed")
+            self._done[path] = fingerprint
+            return
         if Path(name).suffix.lower() not in SUFFIXES:
             self.log(f"skipped {what}")
             self._done[path] = fingerprint
@@ -260,9 +281,12 @@ class Watcher:
             self._done[path] = fingerprint
             return
         try:
-            with path.open("rb") as f:  # read-only: the original is never written
-                data = f.read()
-            changed = _fingerprint(os.stat(path)) != fingerprint
+            with open(os.open(path, _OPEN_FLAGS), "rb") as f:  # read-only: the original is never written
+                # The file opened must be the version that settled. A link or another file
+                # put in its place since the lstat has another file ID, and is not read.
+                swapped = _fingerprint(os.fstat(f.fileno())) != fingerprint
+                data = b"" if swapped else f.read()
+                changed = swapped or _fingerprint(os.fstat(f.fileno())) != fingerprint
         except OSError as e:  # e.g. the writing program still holds it exclusively on Windows
             if path not in self._unreadable:
                 self.log(f"waiting: {what} cannot be read yet ({type(e).__name__})")
