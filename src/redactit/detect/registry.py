@@ -69,9 +69,13 @@ class _FailClosed:
 
 
 def _fail_closed(recognizers: list) -> None:
-    """Wrap every regex pattern of every pattern recognizer in `_FailClosed`."""
+    """Wrap every regex pattern of every pattern recognizer in `_FailClosed`, once."""
     for recognizer in recognizers:
         for pattern in getattr(recognizer, "patterns", ()):
+            if isinstance(pattern.compiled_regex, _FailClosed):
+                # The recognizers in patterns.py are module-level objects that every Detector
+                # shares; a second Detector would otherwise wrap them again, one layer each time.
+                continue
             flags = recognizer.global_regex_flags
             if not pattern.compiled_regex or pattern.compiled_with_flags != flags:
                 pattern.compiled_regex = regex.compile(pattern.regex, flags=flags)
