@@ -5,12 +5,13 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, RecognizerResult
+from presidio_analyzer import AnalyzerEngine, EntityRecognizer, RecognizerRegistry, RecognizerResult
 from presidio_analyzer.nlp_engine import SlimSpacyNlpEngine
 from presidio_analyzer.predefined_recognizers import CreditCardRecognizer, IbanRecognizer
 
 from redactit.types import Span
 
+from . import scaling
 from .dictionary import CompanyTermRecognizer
 from .patterns import (
     ADDRESS,
@@ -34,6 +35,10 @@ from .secrets import ApiKeyRecognizer
 _CHECKSUM_TYPES = {"CREDIT_CARD", "IBAN", "CA_SIN", "COMPANY_TERM"}
 _STRUCTURAL_TYPES = {"UK_NINO", "API_KEY"}
 STRUCTURAL_SCORE = 0.85
+
+# Every recognizer and the analyzer call this static method by name; the replacement keeps
+# Presidio's results and their order (scaling.py, tested against Presidio's own).
+EntityRecognizer.remove_duplicates = staticmethod(scaling.remove_duplicates)
 
 
 class Detector:
@@ -68,7 +73,8 @@ class Detector:
         # Built from exactly this list, never `load_predefined_recognizers`, so spaCy's own
         # NER adds nothing: names and most addresses come from the GLiNER model (ner.py).
         registry = RecognizerRegistry(recognizers=recognizers, supported_languages=["en"])
-        self._analyzer = AnalyzerEngine(registry=registry, nlp_engine=nlp_engine, supported_languages=["en"])
+        self._analyzer = AnalyzerEngine(registry=registry, nlp_engine=nlp_engine, supported_languages=["en"],
+                                        context_aware_enhancer=scaling.LinearContextEnhancer())
 
     def detect(self, text: str) -> list[Span]:
         results = self._analyzer.analyze(text=text, language="en")
