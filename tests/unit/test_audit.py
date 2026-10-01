@@ -79,7 +79,8 @@ def test_missing_field_raises(tmp_path):
 @pytest.mark.parametrize(
     ("event", "fields"),
     [
-        ("model_verified", {"model": "someone@example.com", "revision": "r1", "sha256": "0" * 64}),
+        ("model_verified", {"model": "someone@example.com", "source": "download", "revision": "r1", "sha256": "0" * 64}),
+        ("model_verified", {"model": "gliner.model.onnx", "source": "Priya Okafor", "revision": "r1", "sha256": "0" * 64}),
         (
             "review_decision",
             {"rule_id": "entities.person", "action": "pseudonymize", "approved": "Priya Okafor"},

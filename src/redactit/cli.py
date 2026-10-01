@@ -26,9 +26,10 @@ def _paths() -> dict[str, Path]:
 
 
 def _redact(args: argparse.Namespace) -> int:
-    from redactit import safety
+    from redactit import models, safety
 
     safety.block_network()  # before any detector or model code is imported and run
+    pending = models.verify(models.TEXT_MODELS)  # hashes in a thread while the imports below run
     from redactit.audit import AuditLog
     from redactit.formats.docx import docx_to_markdown
     from redactit.formats.image import redact_image
@@ -45,7 +46,8 @@ def _redact(args: argparse.Namespace) -> int:
         assert_admin_owned(managed)
     else:
         managed = None
-    engine = Engine(load_policy(user_policy, managed), Vault.open(paths["vault"]), AuditLog(paths["audit"]))
+    engine = Engine(load_policy(user_policy, managed), Vault.open(paths["vault"]), AuditLog(paths["audit"]),
+                    verified=pending)
     scope = args.scope or uuid.uuid4().hex  # a fresh scope per call unless the caller links runs
     args.out.mkdir(parents=True, exist_ok=True)
     seen = set()
@@ -81,7 +83,9 @@ def _setup_models(_args: argparse.Namespace) -> int:
     from redactit import models
 
     fetched = models.fetch_all()
-    print(f"models ready ({len(fetched)} downloaded, {len(models.LOCK) - len(fetched)} already present)")
+    bundled = models.check_bundled()  # shipped inside packages: checked, never downloaded
+    present = len(models.LOCK) - len(fetched) - len(bundled)
+    print(f"models ready ({len(fetched)} downloaded, {present} already present, {len(bundled)} bundled and verified)")
     return 0
 
 

@@ -24,22 +24,34 @@ class Result:
 class Engine:
     """Loads the analyzer and model once (seconds), then redacts many texts (milliseconds)."""
 
-    def __init__(self, policy: Policy, vault: Vault, audit: AuditLog | None = None):
+    def __init__(self, policy: Policy, vault: Vault, audit: AuditLog | None = None, *,
+                 verified: models.Verification | None = None):
+        """`verified`: a `models.verify(models.TEXT_MODELS)` started before the caller's
+        imports, so the half-second hash runs beside them instead of after."""
         safety.block_network()  # here, not only in the CLI, so every interface runs behind it
         self.policy, self.vault, self.audit = policy, vault, audit
         self.detector = Detector(company_terms=policy.company_terms())
-        # Every pinned file is hash-checked here, once: hashing the NER model takes about a second.
-        paths = {name: models.path_for(name) for name in models.LOCK}
-        self.ner = GlinerNer(paths["gliner/model.onnx"], paths["gliner/tokenizer.json"])
+        # The files stay locked (or are hashed again) until the session holds them, so the
+        # bytes loaded are the bytes hashed (THREAT_MODEL T15).
+        with (verified or models.verify(models.TEXT_MODELS)) as paths:
+            self.ner = GlinerNer(paths["gliner/model.onnx"], paths["gliner/tokenizer.json"])
         purged = vault.purge(policy.vault.retention_days)
         if audit:
             audit.write("engine_start", version=__version__)
             audit.write("policy_loaded", dial=policy.effective_dial(), admin_floor=policy.dial.admin_floor,
                         entity_count=len(policy.entities), locked_count=sum(e.locked for e in policy.entities.values()))
-            for name, pin in models.LOCK.items():  # all verified above, so each event is true
-                audit.write("model_verified", model=name.replace("/", ".").lower(),
-                            revision=pin["url"].split("/resolve/")[1].split("/")[0], sha256=pin["sha256"])
+            self._audit_verified(models.TEXT_MODELS)
             audit.write("vault_purge", purged_count=purged, retention_days=policy.vault.retention_days)
+
+    def _audit_verified(self, names) -> None:
+        for name in names:  # each was verified before its session was built, so the event is true
+            pin = models.LOCK[name]
+            if "package" in pin:
+                source, revision = "package", pin["version"]
+            else:
+                source, revision = "download", pin["url"].split("/resolve/")[1].split("/")[0]
+            self.audit.write("model_verified", model=name.replace("/", ".").lower(), source=source,
+                             revision=revision, sha256=pin["sha256"])
 
     def redact(self, text: str, scope: str, *, file_type: str = "txt", destination: str = "cli",
                site: str | None = None) -> Result:
