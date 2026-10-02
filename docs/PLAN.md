@@ -92,18 +92,21 @@ outbox, through the same per-file code and output names as `redactit redact`
   days, and its files go to different chats.
 - A bad file logs its type and a reason, never its name or content, and is not retried
   until it changes. At most 64 MiB per file, as from the extension.
-- Outputs are kept for 30 days, then deleted (§12). `copies.py` records each one in
-  `copies.json` in the user data folder, never in the outbox: its path, when it was
-  written, and its file ID, size and mtime. A purge runs at start-up and about once an
-  hour. It deletes a copy only if it is recorded, older than 30 days, still has the
-  recorded file ID, size and mtime, and is a regular file, not a link (the same link rule
+- Outputs are kept as long as the vault's entries, then deleted (§12): the policy's
+  `vault.retention_days`, 30 days by default, so a shorter admin or user setting shortens
+  both. `copies.py` records each one in `copies.json` in the user data folder, never in
+  the outbox: its path, when it was written, and its file ID, size and mtime. A purge runs
+  at start-up and about once an hour. It deletes a copy only if it is recorded, older than
+  the retention period, still has the recorded file ID, size and mtime, and is a regular
+  file, not a link (the same link rule
   as the inbox). The user's own files in the outbox were never recorded; a copy the user
   edited or replaced, a link, and anything in the current inbox are dropped from the index
   and left alone. The index is replaced by an atomic rename, and one that cannot be read
   deletes nothing. Each purge writes a `copies_purge` audit event of counts only.
-- Copies expire only while a watcher runs: one never started again keeps its copies. An
-  input left in the inbox is redacted again at the first start-up after its copies expire,
-  as one whose outputs the user deleted is. Originals in the inbox are never deleted.
+- Copies expire only while a watcher runs: one never started again keeps its copies.
+- An input left in the inbox is redacted again once its copies expire, at the next
+  start-up, as one whose outputs the user deleted is. Originals are never touched: the
+  inbox is only read, and the purge never deletes from it.
 
 **`redactit clip`** (`hosts/clipboard.py`) runs once per keypress and never monitors.
 It reads the clipboard's text, leaves an item a password manager marked concealed
@@ -204,7 +207,7 @@ Redactit/
 │  ├─ policy.py              # schema, managed + user layering, dial thresholds
 │  ├─ pseudonym.py           # [TYPE_N] allocation per chat scope
 │  ├─ vault.py               # encrypted mapping store, 30-day purge
-│  ├─ copies.py              # index of the watcher's redacted copies, 30-day purge
+│  ├─ copies.py              # index of the watcher's redacted copies, purged with the vault's retention
 │  ├─ audit.py               # JSONL writer, sanitised reasons only
 │  ├─ safety.py              # blocks IP sockets and DNS inside the engine
 │  ├─ managed.py             # OS-derived admin policy path, admin-ownership check
@@ -457,5 +460,5 @@ Settled:
 
 - **Face fixtures**, in Phase 3 (risk 12).
 - **Outbox retention**, on 2026-10-02. The owner chose 30 days, as for the pseudonym
-  vault: the folder watcher deletes its redacted copies once they are 30 days old (§2.1).
-  The value is `RETENTION_DAYS` in `copies.py`.
+  vault: the folder watcher deletes its redacted copies after the policy's
+  `vault.retention_days`, whose default is 30 (§2.1).
