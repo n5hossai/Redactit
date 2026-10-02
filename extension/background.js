@@ -6,7 +6,8 @@
  * hands back only what the host redacted. It FAILS CLOSED (THREAT_MODEL T7): a missing,
  * stopped, silent or confused host, or an engine error, ends the request with `blocked`,
  * and nothing unredacted is ever handed back. It logs nothing and stores no content:
- * chrome.storage holds one setting and the chat-scope aliases (URL paths), never input.
+ * chrome.storage holds one setting and the pseudonym scopes of chats and tabs (URL paths
+ * and generated ids), never input.
  * Real values behind pseudonyms (redactit/remap) go only to extension pages, never to a
  * content script, so they never reach a site's page (THREAT_MODEL T6).
  *
@@ -54,19 +55,26 @@
  *       Extension pages only: `text` (from the AI) with the tab's chat pseudonyms replaced
  *       by their real values, using the same scope as that tab's redactions. At most 8 MiB.
  *       The result holds real values: show it in the panel, never write it into a page.
- *   redactit/attach {job, tabId}   -> {ok: true} | {ok: false, code, message}. Extension
- *       pages only. Hands the redacted file of the panel's last finished file job (`job`,
+ *   redactit/attach {job, tabId, approve?}   -> {ok: true} | {ok: false, code, message, reason?}.
+ *       Extension pages only. Hands the redacted file of the panel's last finished file job (`job`,
  *       from its `accepted`) to the chat in `tabId`, through that tab's content script,
  *       which inserts it as it would a redacted drop. Only the bytes this worker received
  *       from the host and checked can be attached; the caller sends none. The copy is
  *       kept in memory until attached, replaced by the panel's next file job, or 10
  *       minutes pass, and only for the tab and chat it was redacted for. Codes: expired
  *       (unknown, replaced, timed out, or the tab now shows another chat),
- *       not_allowed_site, insert_failed (no adapter, or the page took nothing).
+ *       not_allowed_site, insert_failed (no adapter, or the page took nothing), and
+ *       review_required {reason: 'always'|'low_confidence'}: the policy holds this copy, as
+ *       it would a page's (see Review), so the panel shows it and sends approve: true only
+ *       on the user's explicit approval.
  *       The file part goes (a PDF or image), never a PDF's Markdown; a text or Word
- *       file's one text part is the file. At most about 48 MiB (a message's limit).
+ *       file's one text part is the file. At most MAX_MESSAGE_FILE (48 MiB, a message's
+ *       limit): a larger one is refused first, with too_large_to_attach.
  *   redactit/review-list          -> [Review]. Extension pages only.
- *   redactit/review-get {job}      -> Review & {text?}: the redacted text part, if any.
+ *   redactit/review-get {job}      -> Review & {text?, file?, fileType?, fileTooLarge?}:
+ *       extension pages only. The redacted text part, and the file part (a PDF or image)
+ *       as base64: the bytes Approve hands over, for the panel to show. A file part above
+ *       MAX_MESSAGE_FILE is not sent (fileTooLarge), and the panel cannot approve it.
  *   redactit/review-decide {job, approve}  -> {ok}. approve=true hands the result to the
  *       page; false blocks it. Extension pages only, so a page cannot approve itself.
  *   redactit/page {adapter, active}     content scripts only: reports the site adapter's
@@ -82,7 +90,8 @@
  *   Review: {job, site, kind, parts, createdAt, expiresAt, reason: 'always'|'low_confidence'}
  *       A page's result is held for review when the host's policy says so: always, or
  *       with low_confidence when the engine marked any decision for review. Never with
- *       'off'. A result requested by an extension page is never held.
+ *       'off'. A result requested by an extension page is not held: it goes to the panel,
+ *       and from there to a chat only through redactit/attach, which holds it the same way.
  *
  * ### Events for the side panel: `chrome.runtime.connect({name: 'redactit/events'})`
  *
@@ -125,6 +134,9 @@ const HOST_STATES = ['warming', 'ready-text', 'ready-all', 'unavailable'];
 /** The policy's review mode as the host reports it ('off' is reserved: no policy sets it yet). */
 const REVIEW_MODES = ['always', 'low_confidence', 'off'];
 const MAX_PANEL_TEXT = 8 * 1024 * 1024;
+/** The largest file one message can carry: a message holds 64 MiB of JSON, and base64
+ * makes 48 MiB of bytes 64 MiB of text. A test build may rewrite this line. */
+const MAX_MESSAGE_FILE = 48 * 1024 * 1024;
 const FRAMING_FAULTS = new Set(['bad_frame', 'message_too_large', 'bad_json', 'bad_message', 'bad_sequence',
   'unknown_request', 'duplicate_request']);
 
@@ -173,6 +185,9 @@ const REASONS = {
   cancelled: 'Cancelled.',
   insert_failed: 'Redactit could not hand the redacted version to this page.',
   expired: 'This redacted copy is no longer available for this chat. Redact the file again.',
+  review_required: "Your organization's policy asks you to review this copy before it goes to the chat.",
+  too_large_to_attach: 'This redacted copy is larger than 48 MiB, too large to attach from here. Download it instead, '
+    + 'then add it to the chat.',
   extension_error: 'Redactit hit an internal error.',
   internal: 'Redactit hit an internal error.',
 };
@@ -674,7 +689,8 @@ let attachTimer = null;
 function keepForAttach(job) {
   forgetAttachable();
   attachable = { job: job.id, kind: job.kind, tabId: job.tabId, site: job.site, scope: job.scope,
-    parts: job.result.parts, size: job.result.size, chunks: job.chunks, expiresAt: Date.now() + ATTACH_KEEP_MS };
+    parts: job.result.parts, size: job.result.size, chunks: job.chunks, review: job.result.review,
+    expiresAt: Date.now() + ATTACH_KEEP_MS };
   attachTimer = setTimeout(forgetAttachable, ATTACH_KEEP_MS);
 }
 
@@ -712,6 +728,13 @@ async function attachToChat(msg) {
   const part = kept.parts[index >= 0 ? index : 0];
   const ext = ATTACH_TYPES[part.media_type];
   if (!ext || (index < 0 && kept.parts.length !== 1)) return fail('insert_failed');
+  // One message carries the file to the tab; checked first, so a copy that cannot go is
+  // never put up for review and the user is told to download it.
+  if (part.size > MAX_MESSAGE_FILE) return fail('too_large_to_attach');
+  // The policy's review applies to what reaches a chat, however it gets there: a copy the
+  // policy would hold goes in only once the panel has shown it and the user approved.
+  const reason = reviewReason(kept.review);
+  if (reason && msg.approve !== true) return { ...fail('review_required'), reason };
   const at = kept.parts.slice(0, kept.parts.indexOf(part)).reduce((n, p) => n + p.size, 0);
   const bytes = fromB64Chunks(kept.chunks, kept.size).subarray(at, at + part.size);
   let answer;
@@ -835,17 +858,25 @@ function reviewList() {
   return [...jobs.values()].filter((j) => j.review).map(reviewOf);
 }
 
-/** The redacted text part of a held result, for the panel to show. */
-function reviewText(job) {
+/**
+ * A held result as the reviewer must see it: its text part, and its file part (a PDF or
+ * an image), the very bytes Approve hands to the page, as base64 with its type. Only for
+ * extension pages (redactit/review-get is panel-only): a page must not read what waits
+ * for review. A file part too large for one message is marked, not sent, and the panel
+ * then cannot approve it.
+ */
+function reviewContent(job) {
+  const bytes = fromB64Chunks(job.chunks, job.result.size);
+  const out = {};
   let at = 0;
   for (const part of job.result.parts) {
-    if (part.name === 'text') {
-      const bytes = fromB64Chunks(job.chunks, job.result.size);
-      return new TextDecoder('utf-8').decode(bytes.subarray(at, at + part.size));
-    }
+    const slice = bytes.subarray(at, at + part.size);
     at += part.size;
+    if (part.name === 'text') out.text = new TextDecoder('utf-8').decode(slice);
+    else if (part.name === 'file' && part.size <= MAX_MESSAGE_FILE) Object.assign(out, { file: toB64(slice), fileType: part.media_type });
+    else if (part.name === 'file') out.fileTooLarge = true;
   }
-  return undefined;
+  return out;
 }
 
 function decideReview(id, approve) {
@@ -862,48 +893,100 @@ function decideReview(id, approve) {
 
 // --- where a request comes from ----------------------------------------------------------
 
-/** Temporary scopes of new chats, per tab, and the chat each was later given (PLAN §6). */
-const scopes = { temp: {}, alias: {} };
-const scopesLoaded = chrome.storage.session.get({ scopes })
-  .then((s) => Object.assign(scopes, s.scopes || {}))
-  .catch(() => {});
+/**
+ * Pseudonym scopes (PLAN §6). Both maps hold URL paths and generated ids only, never
+ * anything pasted or picked.
+ *
+ * `chats`, in chrome.storage.local so it outlives a browser restart and an extension
+ * update: every chat a request was made for, mapped to its scope. That is the chat's own
+ * key (`site/chat/<id>`), or, for a chat that began as a new chat, the temporary scope it
+ * began with. Being in `chats` is what "already in use" means. The oldest entries go past
+ * MAX_CHATS.
+ *
+ * `tabs`, in chrome.storage.session (tab ids do not outlive the browser): where each tab
+ * was last seen, `new:<site>` or a chat key, and the temporary scope of the new chat
+ * open there, once a request needed one.
+ */
+const MAX_CHATS = 5000;
+const scopes = { chats: {}, tabs: {} };
+const scopesLoaded = Promise.all([
+  chrome.storage.local.get({ chatScopes: {} }).then((s) => { scopes.chats = s.chatScopes || {}; }),
+  chrome.storage.session.get({ tabScopes: {} }).then((s) => { scopes.tabs = s.tabScopes || {}; }),
+]).catch(() => {});
 
-function saveScopes() {
-  chrome.storage.session.set({ scopes }).catch(() => {});
+function saveChats() {
+  const keys = Object.keys(scopes.chats);
+  for (const key of keys.slice(0, Math.max(0, keys.length - MAX_CHATS))) delete scopes.chats[key];
+  chrome.storage.local.set({ chatScopes: scopes.chats }).catch(() => {});
+}
+
+function saveTabs() {
+  chrome.storage.session.set({ tabScopes: scopes.tabs }).catch(() => {});
+}
+
+/** The chat key of a page on `site`, or null for a new chat (or any page without a chat id). */
+function chatKeyOf(site, pageUrl) {
+  const match = pageUrl && pageUrl.hostname === site ? SITES[site].exec(pageUrl.pathname) : null;
+  return match ? `${site}/chat/${match[1]}` : null;
+}
+
+/**
+ * Records that the tab now shows `pageUrl`. A new chat has no id until its first message,
+ * when the site moves the tab to the chat's URL; seen as exactly that step, from a new
+ * chat with a temporary scope to a chat id never used before, the chat keeps the
+ * temporary scope, and [PERSON_1] still means the same person. Any other step (to a chat
+ * that is already in use, from another chat, from another site) gives the chat nothing,
+ * and the new chat's temporary scope is dropped with the tab's leaving it.
+ */
+function observeTab(site, pageUrl, tabId) {
+  const tab = String(tabId ?? 'none');
+  const was = scopes.tabs[tab] || null;
+  const key = chatKeyOf(site, pageUrl);
+  const at = key || `new:${site}`;
+  if (was && was.at === at) return was;
+  if (key && was && was.at === `new:${site}` && was.temp && !Object.hasOwn(scopes.chats, key)) {
+    scopes.chats[key] = was.temp;
+    saveChats();
+  }
+  scopes.tabs[tab] = { at, temp: null };
+  saveTabs();
+  return scopes.tabs[tab];
 }
 
 /**
  * The pseudonym scope for a request: the chat's id from its URL, so pseudonyms stay
- * stable within a chat. A new chat has no id yet, so it gets a temporary scope for its
- * tab; when that tab reaches a chat URL, the chat keeps the temporary scope, and
- * [PERSON_1] still means the same person.
+ * stable within a chat, or the scope that chat began with as a new chat. A new chat gets
+ * a temporary scope for its tab (observeTab).
  */
 function scopeFor(site, pageUrl, tabId) {
-  const match = pageUrl && pageUrl.hostname === site ? SITES[site].exec(pageUrl.pathname) : null;
-  const tabKey = String(tabId ?? 'none');
-  if (match) {
-    const key = `${site}/chat/${match[1]}`;
-    if (scopes.alias[key]) return scopes.alias[key];
-    const temp = scopes.temp[tabKey];
-    if (temp && temp.startsWith(`${site}/`)) {
-      scopes.alias[key] = temp;
-      delete scopes.temp[tabKey];
-      saveScopes();
-      return temp;
+  const state = observeTab(site, pageUrl, tabId);
+  const key = chatKeyOf(site, pageUrl);
+  if (key) {
+    if (!Object.hasOwn(scopes.chats, key)) {
+      scopes.chats[key] = key;
+      saveChats();
     }
-    return key;
+    return scopes.chats[key];
   }
-  if (!scopes.temp[tabKey]?.startsWith(`${site}/`)) {
-    scopes.temp[tabKey] = `${site}/new/${newId('t')}`;
-    saveScopes();
+  if (!state.temp) {
+    state.temp = `${site}/new/${newId('t')}`;
+    saveTabs();
   }
-  return scopes.temp[tabKey];
+  return state.temp;
 }
 
+// The site moves a tab from a new chat to the chat's URL without a request in between;
+// seeing every step is what keeps a later request in another chat from taking the scope.
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  const url = info.url && safeUrl(info.url); // given only for our three sites
+  const site = url && siteOf(url.origin);
+  if (site) scopesLoaded.then(() => observeTab(site, url, tabId));
+});
+
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (scopes.temp[String(tabId)]) {
-    delete scopes.temp[String(tabId)];
-    saveScopes();
+  if (scopes.tabs[String(tabId)]) {
+    delete scopes.tabs[String(tabId)];
+    saveTabs();
   }
   pageAdapters.delete(tabId);
 });
@@ -1073,7 +1156,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     'redactit/review-list': () => reviewList(),
     'redactit/review-get': () => {
       const job = jobs.get(msg.job);
-      return job && job.review ? { ...reviewOf(job), text: reviewText(job) } : null;
+      return job && job.review ? { ...reviewOf(job), ...reviewContent(job) } : null;
     },
     'redactit/review-decide': () => ({ ok: decideReview(msg.job, msg.approve === true) }),
     'redactit/attach': () => attachToChat(msg),

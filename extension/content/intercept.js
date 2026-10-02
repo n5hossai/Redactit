@@ -2,11 +2,12 @@
  * Redactit's interception on the AI sites, shared by every adapter (PLAN §7).
  *
  * Runs at document_start, before any of the site's scripts, so its capture-phase listeners
- * on `window` are the first to see a paste, a drop, or a file picked in a file input
- * (THREAT_MODEL T5). Each one is cancelled before the site sees it; its content goes to
- * the service worker, and only the redacted result comes back into the page: as a
+ * on `window` are the first to see a paste, a drop, or a click that would open a file
+ * chooser (THREAT_MODEL T5). Each one is cancelled before the site sees it; its content
+ * goes to the service worker, and only the redacted result comes back into the page: as a
  * synthetic event of the same kind, which the site handles as it would the user's, or,
- * if the site ignores that, inserted directly.
+ * if the site ignores that, inserted directly. Files are picked in Redactit's own chooser,
+ * never the page's (see "file choosers" below, and guard.js for picks a script starts).
  *
  * Fails closed (T7): when anything goes wrong the original is simply not passed on, and a
  * notice says why. Nothing here ever receives the real values behind pseudonyms; those
@@ -47,17 +48,45 @@
   let adapterActive = null;
   /** Events we dispatch ourselves: the only untrusted ones our listeners let through. */
   const ours = new WeakSet();
-  /** A drag that started inside this page carries only what the page already shows. */
-  let dragFromPage = false;
+  /**
+   * A drag that started inside this page carries only what the page already shows, so its
+   * drop is left to the page: {data} is what it carried, read once the page's dragstart
+   * listeners had set it (null if they stopped the event). Only a trusted dragstart starts
+   * one. It can outlive its drag (a page that removes the drag's source keeps `dragend`
+   * from ever reaching `window`), and another drag can then arrive from outside, so a drop
+   * is left alone only if it carries exactly that data and no files: no drag that began
+   * in the page can carry the computer's files. It ends at the next drop, dragend or
+   * pointerdown, and after PAGE_DRAG_MS.
+   * @type {{data: string|null}|null}
+   */
+  let pageDrag = null;
+  let pageDragTimer = 0;
+  const PAGE_DRAG_MS = 20_000;
+  /** True only in the task of a page drag's drop, for the editor's insertFromDrop. */
+  let pageDropInserting = false;
   let fileNumber = 0;
+
+  /** FileLists Redactit put into a page's input: redacted already, never taken again. */
+  const given = new WeakSet();
 
   window.addEventListener('paste', onPaste, true);
   window.addEventListener('drop', onDrop, true);
   window.addEventListener('input', onFileInput, true);
   window.addEventListener('change', onFileInput, true);
   window.addEventListener('beforeinput', onBeforeInput, true);
-  window.addEventListener('dragstart', (e) => { if (e.isTrusted) dragFromPage = true; }, true);
-  window.addEventListener('dragend', () => { dragFromPage = false; }, true);
+  window.addEventListener('click', onClick, true);
+  window.addEventListener('redactit-pick', onPickRequest, true);
+  window.addEventListener('dragstart', (e) => {
+    if (!e.isTrusted) return;
+    endPageDrag();
+    pageDrag = { data: null };
+    pageDragTimer = setTimeout(endPageDrag, PAGE_DRAG_MS);
+  }, true);
+  window.addEventListener('dragstart', (e) => { // after the page's listeners set the data
+    if (e.isTrusted && pageDrag && e.dataTransfer) pageDrag.data = dragData(e.dataTransfer);
+  });
+  window.addEventListener('dragend', endPageDrag, true);
+  window.addEventListener('pointerdown', (e) => { if (e.isTrusted) endPageDrag(); }, true);
 
   class Blocked extends Error {
     constructor(code, message) {
@@ -83,11 +112,14 @@
 
   function onDrop(e) {
     if (!e.isTrusted || ours.has(e) || !e.dataTransfer) return;
-    if (dragFromPage) {
-      dragFromPage = false;
+    const data = e.dataTransfer;
+    const drag = pageDrag;
+    endPageDrag();
+    if (drag && drag.data !== null && !carriesFiles(data) && dragData(data) === drag.data) {
+      pageDropInserting = true; // the editor inserts it next, in this same task
+      setTimeout(() => { pageDropInserting = false; }, 0);
       return;
     }
-    const data = e.dataTransfer;
     const files = [...data.files];
     const text = files.length ? '' : data.getData('text/plain');
     if (!files.length && !text && !data.types.length) return;
@@ -97,26 +129,215 @@
   }
 
   /**
-   * A file picked in a file input. Chrome fires `input` then `change`; whichever comes
-   * first takes the files and empties the input, so no later listener, and no script
-   * reading `input.files`, ever sees the originals.
+   * A file picked in the browser's own chooser for one of the page's inputs. Redactit
+   * opens its own chooser instead wherever it can (below, and guard.js), so this is the
+   * second line: the user's click was on something it could not place. Chrome fires
+   * `input` then `change`; whichever comes first takes the files and empties the input,
+   * so no later listener, and no script reading `input.files`, ever sees the originals.
+   * `input` is composed, so it reaches `window` from a shadow root too; from inside a
+   * closed one the path shows only its host, and the input is found inside.
    */
   function onFileInput(e) {
-    const input = e.composedPath()[0];
-    if (!(input instanceof HTMLInputElement) || input.type !== 'file') return;
     if (!e.isTrusted || ours.has(e)) return;
+    const first = e.composedPath()[0];
+    let inputs;
+    if (isFileInput(first)) inputs = [first];
+    else if (e.type === 'input' && !(e instanceof InputEvent)) inputs = hiddenPicks(first);
+    if (!inputs || !inputs.length) return;
     e.stopImmediatePropagation();
-    const files = input.files ? [...input.files] : [];
-    if (!files.length) return;
-    input.value = '';
-    handle({ how: 'input', target: input, caret: null, text: '', files });
+    for (const input of inputs) {
+      const files = input.files ? [...input.files] : [];
+      if (!files.length) continue;
+      input.value = '';
+      handle({ how: 'input', target: input, caret: null, text: '', files });
+    }
+  }
+
+  /** File inputs inside the closed shadow tree of `host` holding files Redactit did not
+   * put there: a pick the page's listeners inside that tree would otherwise get raw. */
+  function hiddenPicks(host) {
+    const found = [];
+    const visit = (root, depth) => {
+      for (const el of root.querySelectorAll('*')) {
+        if (isFileInput(el) && el.files && el.files.length && !given.has(el.files)) found.push(el);
+        const inner = depth < 16 && shadowRootOf(el);
+        if (inner) visit(inner, depth + 1);
+      }
+    };
+    const root = closedRootOf(host);
+    if (root) visit(root, 0);
+    return found;
+  }
+
+  // --- file choosers -----------------------------------------------------------------------
+
+  /**
+   * Redactit's own file chooser. A pick the page starts (guard.js turns its click(),
+   * showPicker() and dispatched clicks into a `redactit-pick` request) or the user starts
+   * on one of the page's file inputs opens on this input instead of the page's. It is in no
+   * document, and nothing the page can reach refers to it, so its events reach only the
+   * listeners here. The picked files are redacted, and only the result goes into the page's
+   * input. The page's input never holds an original, wherever it is, in a shadow root or no
+   * document at all, and whatever the page does to it while the chooser is open.
+   */
+  const chooser = document.createElement('input');
+  chooser.type = 'file';
+  /** Where the open chooser's files go: {deliver(files) -> boolean, cancel()}. */
+  let destination = null;
+  chooser.addEventListener('change', onChosen);
+  chooser.addEventListener('cancel', () => {
+    const to = destination;
+    destination = null;
+    to?.cancel();
+  });
+
+  /** Opens the chooser for a page's input with its options; false if Chrome refused. */
+  function openChooser({ multiple, directory, accept }, to) {
+    chooser.multiple = multiple;
+    chooser.webkitdirectory = directory;
+    chooser.accept = accept;
+    chooser.value = '';
+    try {
+      chooser.showPicker(); // needs the user's gesture, as the page's own chooser would
+    } catch {
+      return false;
+    }
+    destination = to;
+    return true;
+  }
+
+  function onChosen() {
+    const to = destination;
+    destination = null;
+    const files = chooser.files ? [...chooser.files] : [];
+    chooser.value = '';
+    if (!to || !files.length) return;
+    handle({ how: 'pick', deliver: to.deliver, caret: null, text: '', files });
+  }
+
+  /**
+   * guard.js asks for the chooser on behalf of a page script's click() or showPicker() on
+   * a file input. The request carries the input's options only; the redacted files go
+   * back to guard.js, which holds the input, in a `redactit-picked` event, and guard.js
+   * answers by cancelling it. A page can send this request itself: it then gets a chooser
+   * whose files reach it only redacted, which is what its own input would give it.
+   */
+  function onPickRequest(e) {
+    e.stopImmediatePropagation();
+    const detail = typeof e.detail === 'string' ? e.detail : '--';
+    const options = { multiple: detail[0] === 'm', directory: detail[1] === 'd', accept: detail.slice(2) };
+    if (openChooser(options, { deliver: handToGuard, cancel: () => tellGuard('redactit-pick-cancelled') })) {
+      e.preventDefault();
+    }
+  }
+
+  function handToGuard(files) {
+    const data = new DataTransfer();
+    for (const file of files) data.items.add(file);
+    given.add(data.files);
+    const event = new DragEvent('redactit-picked', { cancelable: true, dataTransfer: data });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+
+  function tellGuard(type) {
+    window.dispatchEvent(new Event(type));
+  }
+
+  /**
+   * A click that would open the browser's chooser for one of the page's file inputs (the
+   * input itself, or a label for it) opens Redactit's instead. The click still reaches
+   * the page; only its default action, the chooser, is cancelled, here on `window` before
+   * any page listener runs. Inside a closed shadow root the path shows only its host, so
+   * the element under the pointer (or, from the keyboard, the focused one) is looked up
+   * inside it.
+   */
+  function onClick(e) {
+    if (ours.has(e)) return;
+    const input = fileInputFor(clickedElement(e), e.bubbles, e.composed);
+    if (!input) return;
+    e.preventDefault();
+    if (input.disabled) return;
+    openChooser({ multiple: input.multiple, directory: input.webkitdirectory, accept: input.accept }, {
+      deliver: (files) => setFiles(input, files),
+      cancel: () => dispatchOurs(input, new Event('cancel', { bubbles: true })),
+    });
+  }
+
+  function clickedElement(e) {
+    let node = e.composedPath()[0];
+    const fromKeyboard = e.detail === 0 && e.clientX === 0 && e.clientY === 0;
+    for (let depth = 0; depth < 16; depth += 1) {
+      const root = closedRootOf(node);
+      const inner = root && (fromKeyboard ? root.activeElement : root.elementFromPoint(e.clientX, e.clientY));
+      if (!inner || inner === node) break;
+      node = inner;
+    }
+    return node;
+  }
+
+  /**
+   * The file input a click on `target` would open, found as the browser finds a click's
+   * activation target: the first node on its path with an activation behaviour, where a
+   * label stands for its control.
+   */
+  function fileInputFor(target, goesUp, leavesRoots) {
+    for (let node = target; node; node = goesUp ? parentOnPath(node, leavesRoots) : null) {
+      if (isFileInput(node)) return node;
+      if (node.localName === 'label' && 'control' in node) return isFileInput(node.control) ? node.control : null;
+      if (activatesOtherwise(node)) return null;
+    }
+    return null;
+  }
+
+  /** Elements whose own activation comes before any label around them. */
+  function activatesOtherwise(node) {
+    if (node.localName === 'input') return node.type !== 'hidden';
+    if (node.localName === 'button') return true;
+    return (node.localName === 'a' || node.localName === 'area') && node.hasAttribute?.('href');
+  }
+
+  /** The next node on an event's path: the slot, else the parent, else a shadow root's
+   * host when the event leaves the root. */
+  function parentOnPath(node, leavesRoots) {
+    const slot = node.assignedSlot || closedSlotOf(node);
+    if (slot) return slot;
+    const parent = node.parentNode;
+    if (!parent || parent.nodeType !== Node.DOCUMENT_FRAGMENT_NODE || !parent.host) return parent;
+    return leavesRoots ? parent.host : null;
+  }
+
+  function closedSlotOf(node) {
+    const root = closedRootOf(node.parentNode);
+    if (!root) return null;
+    for (const slot of root.querySelectorAll('slot')) if (slot.assignedNodes().includes(node)) return slot;
+    return null;
+  }
+
+  function isFileInput(node) {
+    return node?.localName === 'input' && node.type === 'file';
+  }
+
+  /** Any shadow root of `el`, open or closed: content scripts may see both. */
+  function shadowRootOf(el) {
+    try {
+      return el?.nodeType === Node.ELEMENT_NODE ? chrome.dom.openOrClosedShadowRoot(el) || null : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** A closed shadow root of `el`: the one kind an event's path does not show from outside. */
+  function closedRootOf(el) {
+    const root = shadowRootOf(el);
+    return root && root !== el.shadowRoot ? root : null;
   }
 
   /** Defence in depth: a paste or drop that reached the editor without passing our
    * listeners above (it should not happen) is stopped before it is inserted. */
   function onBeforeInput(e) {
     if (!e.isTrusted || !/^insertFrom(Paste|Drop|PasteAsQuotation)$/.test(e.inputType)) return;
-    if (e.inputType === 'insertFromDrop' && dragFromPage) return;
+    if (e.inputType === 'insertFromDrop' && pageDropInserting && !(e.dataTransfer && carriesFiles(e.dataTransfer))) return;
     stop(e);
     notice.show('block', `Redactit blocked this. ${LOCAL_REASONS.unreadable} Nothing was sent to the site.`);
   }
@@ -126,11 +347,27 @@
     e.stopImmediatePropagation();
   }
 
+  function endPageDrag() {
+    pageDrag = null;
+    clearTimeout(pageDragTimer);
+  }
+
+  /** Files from the computer: the one thing a drag that began in the page cannot carry. */
+  function carriesFiles(data) {
+    return data.files.length > 0 || [...data.types].includes('Files');
+  }
+
+  /** Every type a drag carries with its data, as one string to compare. */
+  function dragData(data) {
+    return JSON.stringify([...data.types].filter((t) => t !== 'Files').map((t) => [t, data.getData(t)]));
+  }
+
   // --- one paste, drop or pick -------------------------------------------------------------
 
   /**
    * Redacts every item, then hands the page the ones that came back, in one event. An
-   * item that is blocked is left out; the rest still go in.
+   * item that is blocked is left out; the rest still go in. The notice counts what really
+   * went in: text the page took is never reported as "nothing was sent".
    */
   async function handle(req) {
     const items = (req.text ? 1 : 0) + req.files.length;
@@ -140,6 +377,7 @@
     const slow = setTimeout(() => task.shown || notice.show('info', `Redactit is checking ${what}…`, task),
       SLOW_NOTICE_MS);
     const blocked = [];
+    let passed = 0;
     let text = '';
     const files = [];
     try {
@@ -159,19 +397,27 @@
           blocked.push(asBlocked(e));
         }
       }
-      if ((text || files.length) && !insert(req, text, files)) throw new Blocked('insert_failed');
+      if (text || files.length) {
+        const went = insert(req, text, files);
+        const failed = (text && !went.text ? 1 : 0) + (files.length && !went.files ? files.length : 0);
+        passed = (text ? 1 : 0) + files.length - failed;
+        for (let i = 0; i < failed; i += 1) blocked.push(new Blocked('insert_failed'));
+      }
     } catch (e) {
-      blocked.splice(0, blocked.length, asBlocked(e));
+      blocked.push(asBlocked(e));
     } finally {
       clearTimeout(slow);
     }
     if (!blocked.length) return notice.hide(task);
+    // Insert failures last: the reason a user can act on (a file type, a host) comes first.
+    blocked.sort((a, b) => (a.code === 'insert_failed') - (b.code === 'insert_failed'));
     const reason = blocked[0].reason;
-    const passed = items - blocked.length;
-    if (passed > 0 && blocked[0].code !== 'insert_failed') {
-      return notice.show('block', `Redactit blocked ${blocked.length} of ${items} items. ${reason} The rest were added.`);
+    if (passed > 0) {
+      const count = items - passed;
+      return notice.show('block', `Redactit blocked ${count} of ${items} items. ${reason} The rest were added.`);
     }
-    return notice.show('block', `Redactit blocked ${what}. ${reason} Nothing was sent to the site.`);
+    const tail = blocked[0].code === 'insert_failed' ? 'Nothing was added.' : 'Nothing was sent to the site.';
+    return notice.show('block', `Redactit blocked ${what}. ${reason} ${tail}`);
   }
 
   function asBlocked(e) {
@@ -344,12 +590,15 @@
    * synthetic paste or drop carrying only them. A site that handles pastes itself (most
    * rich editors) takes it from there. If it ignores the event, we do what the browser
    * would have done: insert the text, or put the files in the site's file input.
+   * @returns {{text: boolean, files: boolean}} whether the text, and the files, went in
    */
   function insert(req, text, files) {
-    if (req.how === 'input') return setFiles(req.target, files);
+    const both = (ok) => ({ text: ok, files: ok });
+    if (req.how === 'pick') return both(attempt(() => req.deliver(files)));
+    if (req.how === 'input') return both(attempt(() => setFiles(req.target, files)));
     let target = req.target instanceof Element && req.target.isConnected ? req.target : null;
     if (req.how === 'paste') target = target || composer();
-    if (!target) return false;
+    if (!target) return both(false);
     const data = new DataTransfer();
     if (text) data.setData('text/plain', text);
     for (const file of files) data.items.add(file);
@@ -360,11 +609,20 @@
       : new DragEvent('drop', { ...init, dataTransfer: data, clientX: req.point[0], clientY: req.point[1] });
     ours.add(event);
     target.dispatchEvent(event);
-    if (event.defaultPrevented) return true;
-    let ok = true;
-    if (text) ok = insertText(editableOf(target) || composer(), text);
-    if (files.length) ok = setFiles(fileInput(), files) && ok;
-    return ok;
+    if (event.defaultPrevented) return both(true);
+    return {
+      text: !text || attempt(() => insertText(editableOf(target) || composer(), text)),
+      files: !files.length || attempt(() => setFiles(fileInput(), files)),
+    };
+  }
+
+  /** `step()`'s answer, with a throw counted as false: one failed step leaves the other. */
+  function attempt(step) {
+    try {
+      return step() === true;
+    } catch {
+      return false;
+    }
   }
 
   function insertText(el, text) {
@@ -388,12 +646,16 @@
     const data = new DataTransfer();
     for (const file of files) data.items.add(file);
     input.files = data.files;
+    given.add(input.files);
     for (const type of ['input', 'change']) {
-      const event = new Event(type, { bubbles: true, composed: type === 'input' });
-      ours.add(event);
-      input.dispatchEvent(event);
+      dispatchOurs(input, new Event(type, { bubbles: true, composed: type === 'input' }));
     }
     return true;
+  }
+
+  function dispatchOurs(target, event) {
+    ours.add(event);
+    target.dispatchEvent(event);
   }
 
   function isTextField(el) {
@@ -529,7 +791,7 @@
       const target = composer();
       if (ext && typeof msg.data === 'string' && adapter && adapterActive && target) {
         const file = new File([fromB64(msg.data)], `redacted-${(fileNumber += 1)}.${ext}`, { type: msg.media_type });
-        ok = insert({ how: 'drop', target, point: centre(target), caret: null }, '', [file]);
+        ok = insert({ how: 'drop', target, point: centre(target), caret: null }, '', [file]).files;
       }
     } catch {
       ok = false;

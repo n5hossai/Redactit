@@ -19,7 +19,7 @@ import pytest
 pytest.importorskip("playwright")
 
 import browserkit  # noqa: E402
-from browserkit import page_view, wait_for  # noqa: E402
+from browserkit import blob_bytes, page_view, wait_for  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
 NAME, EMAIL, CARD = "Priya Okafor", "priya.okafor@northwind.com", "4111 1111 1111 1111"
@@ -307,7 +307,7 @@ def test_a_held_paste_is_approved_or_cancelled_in_the_review_queue(setup, mode, 
         assert panel.inner_text("#reviewCount") == "1"
         assert item.locator(".review-what").inner_text() == "Paste on claude.ai"
         assert item.locator(".review-reason").inner_text() == reason
-        assert wait_for(lambda: item.locator(".review-text").input_value()) == REDACTED
+        assert wait_for(lambda: item.locator(".preview-text").input_value()) == REDACTED
         assert editor.inner_text() == ""  # nothing reaches the page until the review ends
         panel.bring_to_front()
         item.locator(".review-approve" if approve else ".review-cancel").click()
@@ -318,6 +318,38 @@ def test_a_held_paste_is_approved_or_cancelled_in_the_review_queue(setup, mode, 
             assert wait_for(lambda: b.recent()[0]["code"] == "review_rejected")
             assert editor.inner_text() == ""
     assert panel.is_visible("#reviewEmpty")
+    assert_no_raw(page_view(chat))
+
+
+@pytest.mark.parametrize("kind", ["png", "pdf"])
+def test_a_held_file_is_shown_as_the_very_file_approve_sends(setup, tmp_path, kind):
+    """The reviewer sees the redacted image itself, or the redacted PDF itself beside its page
+    text, never only a name; Approve is enabled once it is shown, and what went in is that."""
+    s = setup()
+    stub(s, reviewMode="always")
+    b = s.browser
+    chat, panel = open_panel(s)
+    path = tmp_path / f"Priya Okafor scan.{kind}"
+    path.write_bytes(ORIGINAL[kind])
+    b.drop_files(chat, "#dropzone", [path])  # a desktop drop on the chat, held by the policy
+    item = panel.locator("#reviewList .review")
+    wait_for(lambda: item.count() == 1)
+    approve = item.locator(".review-approve")
+    wait_for(lambda: approve.is_enabled())
+    if kind == "png":
+        assert item.locator(".preview-image").is_visible()
+        url = item.locator(".preview-image").get_attribute("src")
+    else:
+        assert item.locator(".preview-file").is_visible()
+        url = item.locator(".preview-file").get_attribute("href")
+        assert item.locator(".preview-text").input_value() == MARKDOWN
+    assert url.startswith(f"blob:{browserkit.ORIGIN}")
+    assert blob_bytes(panel, url) == STUB_OUT[kind]
+    assert chat.evaluate("window.__attachments.length") == 0
+    panel.bring_to_front()
+    approve.click()
+    wait_for(lambda: chat.evaluate("window.__attachments.length") == 1)
+    assert base64.b64decode(chat.evaluate("window.__read(0)")) == STUB_OUT[kind]
     assert_no_raw(page_view(chat))
 
 
@@ -357,6 +389,25 @@ def test_remapping_is_not_available_when_refused_and_real_values_stay_in_the_pan
     assert_no_raw(" ".join(panel.console))
     panel.click("#remapClearBtn")
     assert panel.is_hidden("#remapResult") and panel.inner_text("#remapOut") == ""
+
+
+def test_real_values_are_cleared_when_the_tab_moves_to_another_chat(setup):
+    """Real values belong to the chat they were mapped for; the same tab showing another
+    chat clears them, as another tab would."""
+    s = setup()
+    stub(s)
+    b = s.browser
+    chat = b.open("https://claude.ai/chat/first-chat-0001")
+    panel = b.panel()
+    panel.click("#remapSection summary")
+    panel.fill("#remapIn", "I will write to [PERSON_1] today.")
+    panel.click("#remapBtn")
+    wait_for(lambda: panel.is_visible("#remapResult"))
+    assert NAME in panel.inner_text("#remapOut")
+    chat.goto("https://claude.ai/chat/second-chat-0002")
+    wait_for(lambda: panel.is_hidden("#remapResult"))
+    assert panel.inner_text("#remapOut") == ""
+    assert "chat in view changed" in panel.inner_text("#remapStatus")
 
 
 def test_the_panel_fits_side_panel_widths_and_works_from_the_keyboard(setup):

@@ -70,8 +70,8 @@ flowchart LR
 | T2 | Text survives in a PDF layer, metadata or embedded image | Engine | Pages rebuilt from images only; every page also goes through the image pipeline | Leak test: re-extract text layer, 300 DPI re-OCR, raw byte search |
 | T3 | EXIF/GPS or text chunks survive in an image | Engine | Re-encode from raw pixels | Leak test: metadata dump and byte search |
 | T4 | DOCX comments, tracked deletions, headers or `docProps` leak | Engine | All OOXML parts walked; `docProps` dropped from output | Leak test DOCX variants |
-| T5 | The site reads a paste before we redact it | B1 | Capture-phase listeners on `window`, registered at `document_start` in every frame; the trusted event is cancelled, or the picked files taken out of the input, before any site listener runs; only redacted data goes back in (PLAN §7) | `tests/e2e/test_round_trip.py`: a real Ctrl+V paste, a desktop file drop (DevTools drag events) and a file pick reach the page's own window-capture listeners only as redacted synthetic events, and no raw value is in any event, DOM mutation or markup the page holds, on the claude.ai layout and on a page whose adapter turned itself off. Live sites: the owner's manual script (PLAN §11) |
-| T6 | Re-mapped real names are exposed to the site | B1 | Re-mapping only inside the side panel (an extension page); never written to the site DOM. `redactit/remap` and the review API answer extension pages only (`not_allowed` to anyone else), a job port cannot start a remap, and content scripts only ever receive redacted host output. The host's remap audit holds counts only | `tests/e2e/test_guard.py`: from the content script's own world, remap, the review queue and a remap job are refused, while the panel's page is served; `tests/unit/test_extension.py`: these messages are handled only among the panel-only ones and no content script names them; `tests/test_host.py` and `tests/unit/test_pseudonym.py`: only the scope's own labels come back, audited as counts; review check of the side panel when it lands |
+| T5 | The site reads a paste, drop or picked file before we redact it | B1 | Capture-phase listeners on `window`, registered at `document_start` in every frame; the trusted event is cancelled before any site listener runs; only redacted data goes back in (PLAN §7). The browser's file chooser never opens on one of the site's inputs: a click on `window`, the user's or a script's, and in the main-world guard a script's `click()`, `showPicker()` or dispatched click on a file input or its label, opens Redactit's own chooser, whose input is in no document, and only the redacted files go into the site's input, wherever it is (no document, an open or closed shadow root) and whatever the site does to it meanwhile. A drop is left to the site only when it carries exactly what a drag begun in the page carried, and never files | `tests/e2e/test_round_trip.py`: a real Ctrl+V paste, a desktop file drop (DevTools drag events) and a file pick reach the page's own window-capture listeners only as redacted synthetic events, and no raw value is in any event, DOM mutation or markup the page holds, on the claude.ai layout and on a page whose adapter turned itself off. `tests/e2e/test_file_picks.py`: a file input in no document, in an open or a closed shadow root, opened by `click()`, `showPicker()`, a dispatched click, a label, or the user, some removed from the page while the chooser is open, gives the page only the redacted file, read by its listeners and a timer polling the input; the guard's replacements cannot be deleted or redefined. `tests/e2e/test_drags.py`: after an in-page drag whose `dragend` the page kept from Redactit, a desktop file drop and a text drop from outside are intercepted. Live sites: the owner's manual script (PLAN §11) |
+| T6 | Re-mapped real names are exposed to the site | B1 | Re-mapping only inside the side panel (an extension page); never written to the site DOM. `redactit/remap` and the review API answer extension pages only (`not_allowed` to anyone else), a job port cannot start a remap, and content scripts only ever receive redacted host output. The host's remap audit holds counts only. A label means one person in one chat: a new chat's temporary scope goes only to the chat ID the site gives it, never to a chat already in use, and that link is kept in `chrome.storage.local` (URL paths only) across browser restarts and updates; a copy redacted for one chat is not attached to another | `tests/e2e/test_guard.py`: from the content script's own world, remap, the review queue and a remap job are refused, while the panel's page is served; `tests/unit/test_extension.py`: these messages are handled only among the panel-only ones and no content script names them; `tests/test_host.py` and `tests/unit/test_pseudonym.py`: only the scope's own labels come back, audited as counts; `tests/e2e/test_scopes.py`: a new chat's scope does not go to an older chat the tab opens, and survives a browser restart; `tests/e2e/test_attach.py`: attach is refused once the tab shows another chat; review check of the side panel when it lands |
 | T7 | Upload proceeds while the engine is down | B1/B2 | Fail closed: a missing or exited host, 2 minutes of silence (10 for files), a request held past 30 s of warm-up, an engine error or a protocol violation blocks the paste or upload, with a notice that says why; a result is used only once every chunk is in and checked | `tests/e2e/test_fail_closed.py`: host not registered, killed mid-request, stuck warming past the (shortened) limit, engine unavailable, a frame outside the protocol, and a cancel: the paste and the upload are blocked and the page sees nothing |
 | T8 | Another extension or process drives the native host | B2 | `allowed_origins` with one fixed ID; host also checks the origin argument Chrome passes against the installed manifest | `tests/test_host.py`: a wrong origin and the unfilled template are refused before the engine loads; `tests/unit/test_native.py`: the manifest must allow exactly one well-formed ID. Registration itself: installer test (Phase 7) |
 | T9 | Oversized or malformed native messages crash the host or truncate data | B2 | Length-prefixed frames, 512 KiB chunks with checked sequence numbers and totals, strict JSON schema, caps per message, payload and in-flight requests | `tests/unit/test_native.py` (schema, reassembly); `tests/test_host.py` (bad length, bad JSON, oversized message, wrong sequence number, unknown type, caps; a multi-MB PDF and image byte-identical to the engine's output) |
@@ -122,16 +122,43 @@ flowchart LR
   the same name, while the watcher was stopped can keep older times. It is then not
   redone, and the outbox keeps the earlier version's output. While the watcher runs, the
   file's new fingerprint catches the change.
-- **Paths into a page the extension does not see.** It intercepts pastes, drops and
-  `<input type="file">` picks. A main-world guard (`content/guard.js`, run at
-  `document_start` before the site's scripts) makes the site's own
-  `navigator.clipboard.read`/`readText` and `showOpenFilePicker`/`showDirectoryPicker`
-  reject with `NotAllowedError`, as if the user had refused, so a site falls back to the
-  intercepted paths. The replacements are non-writable and non-configurable, so the page
-  cannot reassign, redefine or delete them (`tests/e2e/test_guard.py`). A site set on
-  bypassing them still can: it can take untouched copies from another realm (a new
-  same-origin iframe read before the guard runs in it, or a worker). The guard steers; it
-  is not a sandbox. Typed text is not intercepted at all.
+- **Paths into a page the extension does not see.** It intercepts pastes, drops and file
+  picks. A main-world guard (`content/guard.js`, run at `document_start` before the site's
+  scripts) makes the site's own `navigator.clipboard.read`/`readText` and
+  `showOpenFilePicker`/`showDirectoryPicker` reject with `NotAllowedError`, as if the user
+  had refused, so a site falls back to the intercepted paths, and it turns a script's
+  `click()`, `showPicker()` or dispatched click on a file input into Redactit's own chooser
+  (T5). The replacements are non-writable and non-configurable, so the page cannot
+  reassign, redefine or delete them (`tests/e2e/test_guard.py`,
+  `tests/e2e/test_file_picks.py`). The guard runs in every frame and popup on the three
+  sites: one with no document to load (an iframe without `src` or with `about:blank`,
+  `window.open('')`) has it, and intercept.js, in the very task that creates it, and a
+  worker has neither the clipboard nor file pickers. What a site set on bypassing it can
+  still do, all recorded in `tests/e2e/test_guard.py`:
+  - An iframe given `srcdoc`, a `blob:` URL or a same-origin URL, or a popup opened on
+    one, gets the content scripts only when that document starts. In the task that
+    creates it, its window, which the document then goes on to use, is one Redactit has
+    not reached: the site can take the browser's own `click()`, `dispatchEvent()` or
+    clipboard reads from it, and open the browser's chooser on its own file input (the
+    picked file then reaches it raw), or add a `paste` listener there that runs before
+    intercept.js's (it then reads a paste into that frame raw, though the paste itself is
+    still blocked or redacted). Closing this would mean reaching every such window from
+    the parent the moment it is created, which no extension API offers.
+  - A frame from another origin inside the site gets neither script.
+  - Two clicks on a file input in a closed shadow root are ones Redactit cannot place,
+    and they open the browser's chooser. One is a script click through a label around a
+    slot, in a root built from HTML rather than `attachShadow`, whose event never reaches
+    `window` (it is in no document, or dispatched without `composed`). The other is a
+    keyboard or assistive-technology activation that names neither the element under the
+    pointer nor the focused one. Redactit then still takes the files from the input's
+    `input` event on `window`, unless the input is in no document or the site removes it
+    while the chooser is open.
+  - The site can see that the guard's functions are not native, that a `click()` which
+    opens a chooser dispatches no click event, and that a user's click on a file input is
+    cancelled. A site script that assigns one of the locked functions in strict mode gets
+    a `TypeError`.
+  The guard steers and closes the ordinary routes; it is not a sandbox against a site
+  written to evade it. Typed text is not intercepted at all.
 - **Notice presence.** The in-page notice's text is in a closed shadow root, but the site
   can see that a notice element appeared, and so that Redactit is installed and acted.
 - **Same-user malware** can read the keychain and originals. Out of scope.

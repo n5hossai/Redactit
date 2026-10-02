@@ -17,7 +17,8 @@
 //           A remap request gets its text with options.replace undone.
 //   hang    ready at once; takes requests, reports `queued` and `redacting`, never answers.
 //
-// Every frame from the worker is logged in self.__stubFrames as {type, id}, never its data.
+// Every frame from the worker is logged in self.__stubFrames as {type, id}, and a request's
+// pseudonym scope (a URL path) as `scope`; never its data.
 (mode, options) => {
   const RAW_CHUNK = 384 * 1024;
   const opts = { warmMs: 0, pages: 2, pageMs: 200, replace: {}, files: {}, markdown: '# Page 1\n',
@@ -93,7 +94,7 @@
       onMessage: { addListener: (fn) => listeners.message.push(fn) },
       onDisconnect: { addListener: (fn) => listeners.disconnect.push(fn) },
       postMessage(msg) {
-        frames.push({ type: msg.type, id: msg.id ?? null });
+        frames.push({ type: msg.type, id: msg.id ?? null, ...(typeof msg.scope === 'string' ? { scope: msg.scope } : {}) });
         if (['redact_text', 'redact_file', 'remap'].includes(msg.type)) {
           const kind = msg.kind || (msg.type === 'remap' ? 'remap' : 'text');
           requests.set(msg.id, { kind, total: msg.total, chunks: [], cancelled: false });

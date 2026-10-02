@@ -60,7 +60,7 @@ from pathlib import Path
 from redactit import __version__
 
 PROTOCOL = 2
-CHUNK =512 * 1024  # base64 characters per chunk: a frame stays near 512 KiB, half Chrome's 1 MB cap to the extension
+CHUNK = 512 * 1024  # base64 characters per chunk: a frame stays near 512 KiB, half Chrome's 1 MB cap to the extension
 RAW_CHUNK = CHUNK // 4 * 3  # the payload bytes those characters carry (384 KiB)
 MAX_FRAME = CHUNK + 4096  # one chunk and its envelope: the largest frame a well-formed extension sends
 TO_EXTENSION_MAX = 1024 * 1024  # Chrome's cap on one message to the extension

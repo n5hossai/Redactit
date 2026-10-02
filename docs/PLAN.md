@@ -291,8 +291,9 @@ are committed.
 - **Review mode** `always` or `low_confidence_only`. A review that times out blocks the
   send; it never passes content through unredacted.
 - **Pseudonyms** `[PERSON_1]` are allocated per chat scope. The extension derives the
-  scope from the chat URL. A brand-new chat uses a temporary scope that is re-keyed once
-  the site assigns an ID. Vault entries purge after 30 days.
+  scope from the chat URL. A brand-new chat uses a temporary scope, which the chat keeps
+  once the site assigns its ID, and which never goes to any other chat (§7). Vault entries
+  purge after 30 days.
 - **Re-mapping** of pseudonyms back to real names happens only inside the side panel,
   which is an extension page. Real names are never written into the AI site's DOM, where
   the site's scripts could read them. The panel sends the AI's reply through the service
@@ -314,18 +315,31 @@ are committed.
   the repo (`*.pem` is ignored); it is needed only to pack a `.crx` with the same ID. The
   Chrome Web Store assigns its own key and ID at the first upload: from then on the
   manifest carries the store's public key, and `allowed_origins` follows the store's ID.
-- Interception (`content/intercept.js`): capture-phase `paste`, `drop` and file-input
-  `input`/`change` listeners on `window`, registered at `document_start` in every frame, so
-  they run before any site listener. Only trusted events are taken (a page's own synthetic
-  events carry data it already has). The original event is cancelled, or the picked
-  files are taken out of the input, and the payload goes to the engine. The result goes
+- Interception (`content/intercept.js`): capture-phase `paste`, `drop`, `click` and
+  file-input `input`/`change` listeners on `window`, registered at `document_start` in
+  every frame, so they run before any site listener. Only trusted events are taken (a
+  page's own synthetic events carry data it already has). The original event is
+  cancelled, or the files picked are Redactit's own (below), and the payload goes to the engine. The result goes
   back as a synthetic event of the same kind carrying only redacted data, which a site's
   editor handles like the user's; if the site ignores it, the text is inserted into the
   field (`setRangeText`, or `insertText` in a contenteditable) and files are put in the
   site's file input. Files come back under neutral names (`redacted-N.ext`), because a
   file name can identify someone and the engine does not check names. A PDF goes back as
   its redacted PDF; its Markdown is not attached. File types the engine cannot check (SVG,
-  archives, spreadsheets) are blocked. A drag that starts inside the page is left alone.
+  archives, spreadsheets) are blocked. A drag that starts inside the page is left alone,
+  but only its own drop: one that carries exactly what that drag carried and no files.
+  The record of it ends at the next drop, `dragend` or pointerdown, and after 20 s, since
+  a page can keep `dragend` from reaching `window`.
+- File picks: the browser's chooser never opens on one of the site's file inputs, since
+  the input's events need not pass `window` (an input in no document, or in a shadow
+  root), and a site could move it out of the document while the chooser is open. A click
+  that would open one, seen on `window` (the user's, looked up inside closed shadow roots
+  with `chrome.dom.openOrClosedShadowRoot`), or a script's `click()`, `showPicker()` or
+  dispatched click caught by the main-world guard, opens Redactit's own chooser instead:
+  an input in no document that only the content script holds. The picked files are
+  redacted, and only the result goes into the site's input with an `input` and a
+  `change` event. Nobody taking the request means nothing opens. The `input` listener on
+  `window` stays as a second line, and finds a pick inside a closed shadow root.
 - Fail closed: a host that is not installed, exits, sends nothing for 2 minutes (10 for
   files, whose single OCR step reports no progress), breaks the protocol, or reports an
   error blocks the paste or upload, with an in-page notice that says why. Nothing is
@@ -355,9 +369,16 @@ are committed.
   Keep Redactit ready on, and never after the host's own idle exit; otherwise the next
   paste starts it. A host whose engine could not start is restarted by the next request.
 - Pseudonym scope: the chat's ID from its URL (`claude.ai/chat/<id>`, `chatgpt.com/c/<id>`,
-  `gemini.google.com/app/<id>`). A new chat gets a temporary scope for its tab; when that
-  tab reaches a chat URL, the chat keeps the temporary scope, so `[PERSON_1]` still means
-  the same person. The mapping is kept in `chrome.storage.session` (URL paths only).
+  `gemini.google.com/app/<id>`). A new chat gets a temporary scope for its tab. The worker
+  follows each tab's URL on the three sites (`tabs.onUpdated`, and every request), and only
+  the step from a new chat straight to a chat ID never used before gives that chat the
+  temporary scope, so `[PERSON_1]` still means the same person once the site has assigned
+  the ID. A tab that opens a chat already in use, or any other step, leaves the new chat's
+  scope behind: an older chat never takes labels that mean other people there. The chats
+  and their scopes are kept in `chrome.storage.local`, so they outlive a browser restart
+  and an extension update (the 5,000 most recent chats); each tab's place and temporary
+  scope in `chrome.storage.session`. Both hold URL paths and generated IDs only, never
+  content (`tests/e2e/test_scopes.py`).
 - Host launch (built in Phase 7): the manifest's `path` is a small launcher the installer
   writes. It starts the base interpreter directly, because the venv's launcher costs 1.37 s
   against 0.3-1.1 s for base Python:
@@ -396,7 +417,13 @@ are committed.
     or until the panel starts another file, and only for the tab and chat it was redacted
     for, whose pseudonym labels it carries. The tab's content script inserts the file part
     as a redacted drop (composer, else file input) and refuses without a working adapter
-    (`insert_failed`); other refusals are `expired` and `not_allowed_site`. Dragging the left folder carries only
+    (`insert_failed`); other refusals are `expired`, `not_allowed_site`, and
+    `too_large_to_attach` for a copy over 48 MiB, the most one message to the tab carries,
+    checked before anything else is done with it, whose reason says to download it. The policy's
+    review applies here as to a page's paste: a copy it would hold (`always`, or
+    `low_confidence` with decisions marked) is refused with `review_required` until the
+    panel has shown it (the text, the image, or the PDF itself and its page text) and the
+    user has pressed Approve, which sends `approve: true`. Dragging the left folder carries only
     `DownloadURL`, which saves the copy where it is dropped outside the browser: Chromium
     does not carry a File made in a page to another page (it arrives as its name in
     `text/plain`, which a chat would paste; recorded in `tests/e2e/test_panel.py`).
@@ -406,7 +433,11 @@ are committed.
     `keepReady`; the review mode is shown read-only, `Not known yet` until the host's
     policy loads, an unknown mode as off.
   - Review queue: each held item with what and where it is, why it is held
-    (`always` or `low_confidence`), the time left and its redacted text; Approve or Cancel.
+    (`always` or `low_confidence`), the time left and its redacted content, the very
+    bytes Approve hands over (`redactit/review-get`, extension pages only): text as text,
+    an image as the image, a PDF as the PDF itself, opened from the panel in the
+    browser's viewer, beside its page text. Approve is enabled only once all of it is
+    shown; a file too large for one message (48 MiB) cannot be approved. Approve or Cancel.
   - Re-mapping (`redactit/remap`): a pasted reply is shown with real values, as text in
     the panel's DOM only. Never stored, never sent to a tab, never copied by itself:
     copying takes its own click beside a warning that the text holds real data, and the
@@ -419,9 +450,14 @@ are committed.
   cannot read it. They show status and reasons only, never content.
 - Main-world guard (`content/guard.js`): the one script that runs in the page's own world,
   at `document_start` on the three sites, before their scripts. It makes the site's own
-  clipboard reads and file pickers reject with `NotAllowedError`, locked against being
-  reassigned or deleted, so a site uses paste and the file input, which are intercepted.
-  What a determined page can still do is in THREAT_MODEL §5.
+  clipboard reads and file pickers reject with `NotAllowedError`, and turns a script's
+  `click()`, `showPicker()` or dispatched click on a file input (or its label, walked
+  through slots and shadow roots as the browser builds the event's path) into a request
+  for Redactit's chooser (`redactit-pick`); the redacted files come back
+  (`redactit-picked`) and it puts them in the input. Everything is locked against being
+  reassigned or deleted, and calls only the browser functions it took before any site
+  script ran. What a page set on evading it can still do (a window it reaches in the task
+  that creates it, before Chromium injects the guard there) is in THREAT_MODEL §5.
 - Adapters (`content/adapters/claude.js`, `chatgpt.js`, `gemini.js`): one file per site,
   isolated, naming only the composer and the file input. Each adapter self-checks its
   selectors for 15 s after load and disables itself (fallback only) if they are missing;

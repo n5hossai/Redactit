@@ -75,13 +75,17 @@ def _rewrite(path: Path, old: str, new: str) -> None:
 
 
 def build_extension(dest: Path, host_name: str, *, warm_hold_ms: int | None = None,
-                    adapter_check_ms: int | None = None, attach_keep_ms: int | None = None) -> Path:
+                    adapter_check_ms: int | None = None, attach_keep_ms: int | None = None,
+                    max_message_file: int | None = None) -> Path:
     shutil.copytree(EXTENSION, dest)
     _rewrite(dest / "background.js", "const HOST_NAME = 'com.redactit.host';", f"const HOST_NAME = '{host_name}';")
     if warm_hold_ms is not None:
         _rewrite(dest / "background.js", "const WARM_HOLD_MS = 30_000;", f"const WARM_HOLD_MS = {warm_hold_ms};")
     if attach_keep_ms is not None:
         _rewrite(dest / "background.js", "const ATTACH_KEEP_MS = 10 * 60_000;", f"const ATTACH_KEEP_MS = {attach_keep_ms};")
+    if max_message_file is not None:
+        _rewrite(dest / "background.js", "const MAX_MESSAGE_FILE = 48 * 1024 * 1024;",
+                 f"const MAX_MESSAGE_FILE = {max_message_file};")
     if adapter_check_ms is not None:
         _rewrite(dest / "content" / "intercept.js", "const ADAPTER_CHECK_MS = 15_000;",
                  f"const ADAPTER_CHECK_MS = {adapter_check_ms};")
@@ -300,10 +304,18 @@ class Setup:
         self.browser = None
         self.registration = Registration(tmp, profile, name, host) if host else None
         try:
-            self.browser = Browser(playwright, profile, build_extension(tmp / "extension", name, **build))
+            self._launch = (playwright, profile, build_extension(tmp / "extension", name, **build))
+            self.browser = Browser(*self._launch)
         except BaseException:
             self.close()
             raise
+
+    def restart_browser(self) -> None:
+        """Closes the browser and starts it again on the same profile, as a user restarting
+        it would: chrome.storage.local stays, chrome.storage.session and tab ids do not."""
+        browser, self.browser = self.browser, None
+        browser.close()
+        self.browser = Browser(*self._launch)
 
     def close(self) -> None:
         try:
@@ -386,6 +398,16 @@ def wait_for(predicate, timeout: float = 60, step: float = 0.2):
             return value
         time.sleep(step)
     raise TimeoutError("condition not met")
+
+
+def blob_bytes(page, url: str) -> bytes:
+    """The bytes behind one of an extension page's blob URLs, read in that page."""
+    return base64.b64decode(page.evaluate("""async (url) => {
+      const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return btoa(bin);
+    }""", url))
 
 
 def page_view(page) -> str:

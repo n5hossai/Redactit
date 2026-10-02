@@ -47,8 +47,12 @@ export function initRemap() {
       const why = typeof reply.message === 'string' ? ` ${reply.message}` : '';
       return say(`Re-mapping is not available right now.${why}`, 'warn');
     }
+    const now = await findTarget(); // the tab may have moved to another chat meanwhile
+    if (!now || now.id !== target.id || now.chat !== target.chat) {
+      return say('The chat in view changed. Show real values again for this chat.', 'warn');
+    }
     out.textContent = reply.text;
-    mappedFor = target.id;
+    mappedFor = target;
     result.hidden = false;
     status.hidden = true;
     announce('Shown with real values below. They stay in this panel.');
@@ -73,9 +77,10 @@ export function initRemap() {
   });
 
   return {
-    /** Real values belong to the chat they were mapped for. */
+    /** Real values belong to the chat they were mapped for: another tab, or the same tab
+     * on another chat, clears them. */
     targetChanged(target) {
-      if (mappedFor === null || (target && target.id === mappedFor)) return;
+      if (mappedFor === null || (target && target.id === mappedFor.id && target.chat === mappedFor.chat)) return;
       clearOut();
       setNote(status, 'Cleared: the chat in view changed.', '');
     },

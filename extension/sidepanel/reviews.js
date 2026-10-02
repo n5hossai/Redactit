@@ -1,13 +1,17 @@
 /**
  * The review queue: pastes and files held by the worker for review (review mode), each
- * with why it is held and its redacted text, to approve (handed to the page) or cancel
+ * with why it is held and its redacted content, to approve (handed to the page) or cancel
  * (blocked). Only extension pages may read or decide a review, so a site can never
  * approve its own paste; this panel is that reviewer.
  *
- * The list comes from the events port. Each item's text is fetched once with
- * `redactit/review-get` and shown read-only; it is the redacted version, never the input.
+ * The list comes from the events port. Each item's content is fetched once with
+ * `redactit/review-get` and shown read-only (preview.js): its text, and its file part, an
+ * image as the image and a PDF as the PDF itself, the very bytes Approve hands to the
+ * page. It is the redacted version, never the input. Approve stays disabled until all of
+ * that is on view.
  */
 import { $, announce, ask, setNote } from './common.js';
+import { blobOf, showPreview } from './preview.js';
 
 const KIND_NAMES = { text: 'Paste', txt: 'Text file', md: 'Markdown file', docx: 'Word file', pdf: 'PDF', image: 'Image' };
 const REASONS = {
@@ -56,24 +60,28 @@ export function initReviews() {
     approve.addEventListener('click', () => decide(li, review, true));
     cancel.addEventListener('click', () => decide(li, review, false));
     li.review = review;
+    li.shown = false;
     items.set(review.job, li);
     list.append(li);
-    loadText(li, review);
+    loadContent(li, review);
   }
 
-  async function loadText(li, review) {
+  async function loadContent(li, review) {
     const held = await ask({ type: 'redactit/review-get', job: review.job });
-    const box = li.querySelector('.review-text');
-    const none = li.querySelector('.review-notext');
-    if (held && typeof held.text === 'string') {
-      box.value = held.text;
+    const box = li.querySelector('.preview');
+    if (!held || !items.has(review.job)) {
+      const note = box.querySelector('.preview-note');
+      note.textContent = 'This review has ended.';
+      note.hidden = false;
       return;
     }
-    box.hidden = true;
-    none.hidden = false;
-    none.textContent = held
-      ? `No text to show. Approve sends the redacted ${review.kind === 'image' ? 'image' : 'file'} as it is.`
-      : 'This review has ended.';
+    const hasFile = Array.isArray(held.parts) && held.parts.some((p) => p && p.name === 'file');
+    const file = typeof held.file === 'string' && typeof held.fileType === 'string' ? blobOf(held.file, held.fileType) : null;
+    const preview = showPreview(box, { text: typeof held.text === 'string' ? held.text : null, file,
+      fileMissing: hasFile && !file });
+    li.revoke = preview.revoke;
+    li.shown = preview.shown;
+    li.querySelector('.review-approve').disabled = !preview.shown;
   }
 
   async function decide(li, review, approve) {
@@ -84,7 +92,8 @@ export function initReviews() {
       announce(`${describe(review)} ${approve ? 'approved and sent to the chat' : 'cancelled. Nothing was sent'}.`);
       return;
     }
-    buttons.forEach((b) => { b.disabled = false; });
+    li.querySelector('.review-cancel').disabled = false;
+    li.querySelector('.review-approve').disabled = !li.shown;
     const note = document.createElement('p');
     setNote(note, 'This review has already ended.', 'warn');
     li.append(note);
@@ -105,6 +114,7 @@ export function initReviews() {
     for (const [job, li] of items) {
       if (seen.has(job)) continue;
       const hadFocus = li.contains(document.activeElement);
+      li.revoke?.();
       li.remove();
       items.delete(job);
       if (hadFocus) title.focus();
