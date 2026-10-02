@@ -1,8 +1,9 @@
 """Redactit's own redacted copies: which outputs it wrote, and deleting them once they expire.
 
-Redacted copies are kept for RETENTION_DAYS and then deleted, like the pseudonym vault's
-entries. The folder watcher records every output it publishes and purges at start-up and
-about once an hour. The rules:
+Redacted copies are kept as long as the pseudonym vault's entries, then deleted: the
+policy's vault.retention_days, 30 days by default (the owner's decision of 2026-10-02,
+docs/PLAN.md §12), so a shorter admin or user setting shortens both. The folder watcher
+records every output it publishes and purges at start-up and about once an hour. The rules:
 
 - Only a recorded file is ever deleted. `--outbox` can name any folder, including one that
   holds the user's own files, and those were never recorded.
@@ -35,11 +36,6 @@ from redactit.hosts.watcher import _fingerprint, _is_link
 if TYPE_CHECKING:
     from redactit.audit import AuditLog
 
-# The owner's decision of 2026-10-02 (docs/PLAN.md §12): 30 days, as for the vault. A
-# constant of its own, because the vault's 30 is not one: it is the default of the policy
-# setting vault.retention_days, which a user or admin may shorten for the vault alone.
-RETENTION_DAYS = 30
-
 _VERSION = 1
 _ID_FIELDS = ("dev", "ino", "size", "mtime_ns")  # in the order of watcher._fingerprint
 _FIELDS = {"path", "written", *_ID_FIELDS}
@@ -58,9 +54,13 @@ class Purge:
 
 
 class Copies:
-    """The index of redacted copies at `index`, and the purge that deletes expired ones."""
+    """The index of redacted copies at `index`, and the purge that deletes expired ones.
 
-    def __init__(self, index: Path, *, retention_days: int = RETENTION_DAYS,
+    `retention_days` has no default here: it comes from the loaded policy, so the vault's
+    setting is the one place it is set.
+    """
+
+    def __init__(self, index: Path, *, retention_days: int,
                  clock: Callable[[], float] = time.time, audit: AuditLog | None = None) -> None:
         self.index, self.retention_days, self.clock, self.audit = Path(index), retention_days, clock, audit
 

@@ -13,13 +13,14 @@ from types import SimpleNamespace
 
 import pytest
 from redactit.cli import output_name, output_suffixes, redact_file
-from redactit.copies import RETENTION_DAYS, Copies
+from redactit.copies import Copies
 from redactit.detect.registry import PatternTimeout
 from redactit.hosts import watcher
 from redactit.hosts.watcher import TEMP_PREFIX, Watcher
 from redactit.types import RedactitError
 
 SETTLE = 0.4
+RETENTION_DAYS = 30  # the policy's default vault.retention_days, which copies follow
 VALUES = ("Priya", "Okafor", "4111")  # synthetic; none may reach the log
 
 
@@ -51,8 +52,8 @@ def index_beside(inbox, outbox):
 def running(inbox, outbox, convert, settle=SETTLE, copies=None, purge_every=watcher.PURGE_SECONDS):
     """A watcher on a background thread, stopped (and its temp folder removed) on exit."""
     log, errors, stop = [], [], threading.Event()
-    w = Watcher(inbox, outbox, copies=copies or Copies(index_beside(inbox, outbox)), settle=settle, poll=0.02,
-                purge_every=purge_every, log=log.append)
+    copies = copies or Copies(index_beside(inbox, outbox), retention_days=RETENTION_DAYS)
+    w = Watcher(inbox, outbox, copies=copies, settle=settle, poll=0.02, purge_every=purge_every, log=log.append)
 
     def target():
         try:
@@ -82,7 +83,8 @@ def boxes(tmp_path):
 
 def test_the_outbox_cannot_be_the_inbox(tmp_path):
     with pytest.raises(RedactitError, match="different folder"):
-        Watcher(tmp_path / "in", tmp_path / "x" / ".." / "in", copies=Copies(tmp_path / "copies.json"))
+        Watcher(tmp_path / "in", tmp_path / "x" / ".." / "in",
+                copies=Copies(tmp_path / "copies.json", retention_days=RETENTION_DAYS))
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows spellings of one folder")
@@ -97,8 +99,8 @@ def test_the_outbox_cannot_be_the_inbox_under_another_spelling(tmp_path, spell, 
     stop = threading.Event()
     stop.set()  # one pass only, if it starts at all
     with pytest.raises(RedactitError, match="different folder"):
-        Watcher(spell(box), box, copies=Copies(tmp_path / "copies.json"), settle=0, poll=0.01,
-                log=lambda _m: None).run(Recorder(), stop)
+        Watcher(spell(box), box, copies=Copies(tmp_path / "copies.json", retention_days=RETENTION_DAYS),
+                settle=0, poll=0.01, log=lambda _m: None).run(Recorder(), stop)
     left = [p.name for p in box.iterdir()] if box.exists() else []  # refused before or after creating it
     assert left == (["notes.txt"] if exists else [])  # no temp folder, no output
     if exists:
@@ -218,7 +220,8 @@ def test_ctrl_c_in_the_middle_of_a_write_leaves_nothing_behind(boxes, monkeypatc
     inbox, outbox = boxes
     inbox.mkdir()
     (inbox / "notes.txt").write_bytes(b"original")
-    w = Watcher(inbox, outbox, copies=Copies(index_beside(inbox, outbox)), settle=0.05, poll=0.02, log=lambda _m: None)
+    w = Watcher(inbox, outbox, copies=Copies(index_beside(inbox, outbox), retention_days=RETENTION_DAYS),
+                settle=0.05, poll=0.02, log=lambda _m: None)
     partial = []
 
     def interrupted(_fd):  # Ctrl+C lands after the bytes are written, before the rename
@@ -460,7 +463,7 @@ def test_every_published_output_is_recorded(boxes):
 def test_expired_copies_are_deleted_at_start_up(boxes):
     inbox, outbox = boxes
     clock = Clock()
-    copies = Copies(index_beside(inbox, outbox), clock=clock)
+    copies = Copies(index_beside(inbox, outbox), retention_days=RETENTION_DAYS, clock=clock)
     expired = copy_in(outbox, "Priya Okafor.txt", copies)
     clock.now += 10 * DAY
     recent = copy_in(outbox, "recent.txt", copies)
@@ -479,7 +482,7 @@ def test_a_running_watcher_deletes_copies_as_they_expire(boxes):
     assert watcher.PURGE_SECONDS == 3600  # about once an hour; shortened below
     inbox, outbox = boxes
     clock = Clock()
-    copies = Copies(index_beside(inbox, outbox), clock=clock)
+    copies = Copies(index_beside(inbox, outbox), retention_days=RETENTION_DAYS, clock=clock)
     copy = copy_in(outbox, "notes.txt", copies)
     with running(inbox, outbox, Recorder(), copies=copies, purge_every=0.05):
         time.sleep(0.3)
@@ -492,7 +495,7 @@ def test_the_purge_never_touches_the_inbox(tmp_path):
     """An earlier run's outbox, watched now as the inbox: its expired copies are inputs."""
     inbox, outbox = tmp_path / "earlier outbox", tmp_path / "outbox"
     clock = Clock()
-    copies = Copies(tmp_path / "data" / "copies.json", clock=clock)
+    copies = Copies(tmp_path / "data" / "copies.json", retention_days=RETENTION_DAYS, clock=clock)
     earlier = copy_in(inbox, "notes.txt", copies)
     clock.now += 365 * DAY
     with running(inbox, outbox, Recorder(), copies=copies, purge_every=0.05) as (_, log):
@@ -500,3 +503,25 @@ def test_the_purge_never_touches_the_inbox(tmp_path):
         time.sleep(0.3)  # several purges
     assert earlier.read_bytes() == b"[PERSON_1] redacted earlier\n"
     assert (outbox / "notes.txt").exists()
+
+
+@pytest.mark.parametrize(("policy", "kept"), [("vault: {retention_days: 7}\n", False), ("{}\n", True)],
+                         ids=["7-day policy", "default policy"])
+def test_redactit_watch_keeps_copies_as_long_as_the_policy_keeps_the_vault(tmp_path, monkeypatch, policy, kept):
+    """`redactit watch` with the models stood in and only its start-up purge run: a policy
+    whose vault.retention_days is 7 deletes an 8-day-old copy, the default 30 keeps it."""
+    from redactit import cli, models
+
+    data, inbox, outbox = tmp_path / "data", tmp_path / "inbox", tmp_path / "outbox"
+    monkeypatch.setenv("REDACTIT_DATA_DIR", str(data))
+    eight_days_ago = time.time() - 8 * DAY
+    copy = copy_in(outbox, "notes.txt", Copies(data / "copies.json", retention_days=7, clock=lambda: eight_days_ago))
+    (tmp_path / "policy.yaml").write_text(policy, encoding="utf-8")
+    monkeypatch.setattr(models, "verify", lambda *_args: None)
+    monkeypatch.setattr(cli, "open_engine", lambda *_args: SimpleNamespace(warm_text=lambda: None, warm_images=lambda: None))
+    monkeypatch.setattr(watcher, "stop_on_signals", lambda: None)  # leaves this process's signal handlers alone
+    monkeypatch.setattr(Watcher, "run", lambda self, _convert: self._purge())
+
+    argv = ["watch", "--inbox", str(inbox), "--outbox", str(outbox), "--policy", str(tmp_path / "policy.yaml")]
+    assert cli.main(argv) == 0
+    assert copy.exists() == kept

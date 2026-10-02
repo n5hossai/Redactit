@@ -12,8 +12,9 @@ gets the same output names. The rules:
 - Each output is written to a private folder inside the outbox (0700, or an owner-only
   ACL on Windows) and renamed into place, so the outbox never shows a partial file. The
   folder is removed when the watcher stops, by error or Ctrl+C too (THREAT_MODEL T11).
-- Every output is recorded (redactit.copies) and deleted once it is 30 days old, by a purge
-  at start-up and about once an hour. Only recorded copies that are still as written are
+- Every output is recorded (redactit.copies) and deleted once it is as old as the vault's
+  retention period (the policy's vault.retention_days, 30 days by default), by a purge at
+  start-up and about once an hour. Only recorded copies that are still as written are
   deleted, never the user's own files in the outbox, and never anything in the inbox.
 - Log lines give the file type and a reason, never a file's name or content: a name such
   as "<person> passport.png" is sensitive on its own, and logs outlive the run.
@@ -55,8 +56,8 @@ POLL_SECONDS = 0.25
 MAX_FILE = MAX_PAYLOAD  # one file, as large as the browser extension may send one
 TEMP_PREFIX = ".redactit-tmp-"
 
-# How often a running watcher deletes expired copies. Retention is counted in days
-# (copies.RETENTION_DAYS), so a copy outlives its 30 days by at most about an hour.
+# How often a running watcher deletes expired copies. Retention is counted in days (the
+# policy's vault.retention_days), so a copy outlives it by at most about an hour.
 PURGE_SECONDS = 3600.0
 
 # (input file name, its bytes) -> each output's name and its text or bytes (cli.redact_file)

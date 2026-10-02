@@ -8,11 +8,13 @@ from types import SimpleNamespace
 import pytest
 from redactit import copies
 from redactit.audit import AuditLog
-from redactit.copies import RETENTION_DAYS, Copies
+from redactit.copies import Copies
+from redactit.policy import load_policy
 
 DAY = 86400.0
 START = 1_800_000_000.0
 NAME = "Priya Okafor passport.txt"  # synthetic; a name that must never reach a result or the audit file
+RETENTION_DAYS = load_policy(None).vault.retention_days
 
 
 class Clock:
@@ -28,7 +30,8 @@ def box(tmp_path):
     clock, data = Clock(), tmp_path / "data"
     outbox = tmp_path / "outbox"
     outbox.mkdir()
-    store = Copies(data / "copies.json", clock=clock, audit=AuditLog(data / "audit.jsonl"))
+    store = Copies(data / "copies.json", retention_days=RETENTION_DAYS, clock=clock,
+                   audit=AuditLog(data / "audit.jsonl"))
     return SimpleNamespace(copies=store, clock=clock, outbox=outbox, index=data / "copies.json",
                            audit=data / "audit.jsonl", tmp=tmp_path)
 
@@ -49,8 +52,8 @@ def audit_events(box):
     return [json.loads(line) for line in box.audit.read_text(encoding="utf-8").splitlines()]
 
 
-def test_retention_is_the_owners_30_days():
-    assert RETENTION_DAYS == 30 and Copies(".").retention_days == 30
+def test_copies_are_kept_30_days_unless_the_policy_says_otherwise():
+    assert RETENTION_DAYS == 30  # the default vault.retention_days, which copies follow
 
 
 def test_a_copy_older_than_the_retention_period_is_deleted_and_a_newer_one_kept(box):

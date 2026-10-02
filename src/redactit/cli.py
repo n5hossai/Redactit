@@ -44,8 +44,9 @@ def effective_policy(path: Path | None = None):
     return load_policy(user_policy, managed)
 
 
-def open_engine(policy: Path | None = None, verified=None, audit=None):
-    """The engine with the user's policy, keychain vault and audit log. `verified` is a
+def open_engine(policy=None, verified=None, audit=None):
+    """The engine with the user's policy, keychain vault and audit log. `policy` is a
+    policy file, or a Policy the caller already loaded and uses too. `verified` is a
     `models.verify(...)` the caller started before its imports (see Engine); it is
     released here if the engine cannot be built. `audit` is an AuditLog the caller also
     writes to, so one process has one writer for the file (default: a new one)."""
@@ -54,11 +55,13 @@ def open_engine(policy: Path | None = None, verified=None, audit=None):
     with models.released_on_error(verified):
         from redactit.audit import AuditLog
         from redactit.pipeline import Engine
+        from redactit.policy import Policy
         from redactit.vault import Vault
 
         paths = _paths()
         audit = AuditLog(paths["audit"]) if audit is None else audit
-        return Engine(effective_policy(policy), Vault.open(paths["vault"]), audit, verified=verified)
+        loaded = policy if isinstance(policy, Policy) else effective_policy(policy)
+        return Engine(loaded, Vault.open(paths["vault"]), audit, verified=verified)
 
 
 def output_name(name: str, suffix: str) -> str:
@@ -178,19 +181,22 @@ def _watch(args: argparse.Namespace) -> int:
     from redactit.copies import Copies
     from redactit.hosts import watcher
 
-    paths = _paths()
+    # Loaded once, for the engine and for the copies: they are kept as long as the vault's
+    # entries, so a shorter admin or user setting shortens both.
+    paths, policy = _paths(), effective_policy(args.policy)
     audit = AuditLog(paths["audit"])  # shared with the engine: the purge audits beside its redactions
     inbox, outbox = watcher.default_folders()
-    # Refuses outbox == inbox before the models load. The index of copies follows the data
-    # folder, as the vault does, so it stays with the vault and audit log it sits beside.
-    watch = watcher.Watcher(args.inbox or inbox, args.outbox or outbox, copies=Copies(paths["copies"], audit=audit))
+    # The index of copies follows the data folder, as the vault does, so it stays with the
+    # vault and audit log it sits beside.
+    copies = Copies(paths["copies"], retention_days=policy.vault.retention_days, audit=audit)
+    watch = watcher.Watcher(args.inbox or inbox, args.outbox or outbox, copies=copies)  # refuses outbox == inbox before models load
     watcher.stop_on_signals()
     try:
         safety.block_network()
         pending = models.verify(models.TEXT_MODELS)
         with models.released_on_error(pending):
             from redactit.formats import docx, image, pdf  # noqa: F401 - loaded now, while the hash runs
-        engine = open_engine(args.policy, pending, audit)  # one engine for the whole run: the cold start is paid once
+        engine = open_engine(policy, pending, audit)  # one engine for the whole run: the cold start is paid once
         engine.warm_text()
         engine.warm_images()  # now, so the first PDF or image dropped does not wait for OCR to load
 

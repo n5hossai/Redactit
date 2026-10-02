@@ -88,7 +88,7 @@ def test_dropped_files_come_out_redacted(corpus, engine, tmp_path):
     originals = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in inbox.iterdir()}
 
     log, stop = [], threading.Event()
-    watch = Watcher(inbox, outbox, copies=Copies(tmp_path / "data" / "copies.json"), log=log.append)
+    watch = Watcher(inbox, outbox, copies=Copies(tmp_path / "data" / "copies.json", retention_days=30), log=log.append)
     convert = lambda name, data: redact_file(name, data, eng, uuid.uuid4().hex, destination="outbox")  # noqa: E731
     thread = threading.Thread(target=watch.run, args=(convert, stop), daemon=True)
     thread.start()
