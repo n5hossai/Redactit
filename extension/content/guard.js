@@ -36,11 +36,18 @@
  * page can change. A page can see that the functions are not native, and that a click()
  * which opens a file chooser dispatches no click event.
  *
- * What a page can still do: frames run this script too, including a new same-origin
- * iframe read in the same task that creates it, and workers have neither the clipboard nor
- * file pickers. A frame from another origin inside the site gets neither this script nor
- * intercept.js. What remains is in THREAT_MODEL §5. The clipboard read would still need
- * the user's permission, and a chooser a user gesture.
+ * What a page can still do, all of it deliberate (THREAT_MODEL §5; tests/e2e/test_guard.py
+ * records the browser's side of it). Frames and popups run this script too, and one with
+ * no document to load (an iframe without src, or about:blank, a window.open('')) has it in
+ * the very task that creates it; workers have neither the clipboard nor file pickers. But
+ * an iframe given srcdoc, a blob: URL or a same-origin URL, or a popup opened on one, gets
+ * this script only when that document starts, and in the task that creates it its window,
+ * which that document goes on to use, is one this script has not reached. A page set on
+ * bypassing Redactit can take the browser's own click(), dispatchEvent() or clipboard
+ * reads from there, and so open the browser's chooser on its own input, or listen in that
+ * frame for a paste before intercept.js does. A frame from another origin inside the site
+ * gets neither script. The clipboard read would still need the user's permission, and a
+ * chooser a user gesture.
  */
 (() => {
   'use strict';

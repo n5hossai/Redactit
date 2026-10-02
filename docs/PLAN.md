@@ -315,18 +315,31 @@ are committed.
   the repo (`*.pem` is ignored); it is needed only to pack a `.crx` with the same ID. The
   Chrome Web Store assigns its own key and ID at the first upload: from then on the
   manifest carries the store's public key, and `allowed_origins` follows the store's ID.
-- Interception (`content/intercept.js`): capture-phase `paste`, `drop` and file-input
-  `input`/`change` listeners on `window`, registered at `document_start` in every frame, so
-  they run before any site listener. Only trusted events are taken (a page's own synthetic
-  events carry data it already has). The original event is cancelled, or the picked
-  files are taken out of the input, and the payload goes to the engine. The result goes
+- Interception (`content/intercept.js`): capture-phase `paste`, `drop`, `click` and
+  file-input `input`/`change` listeners on `window`, registered at `document_start` in
+  every frame, so they run before any site listener. Only trusted events are taken (a
+  page's own synthetic events carry data it already has). The original event is
+  cancelled, or the files picked are Redactit's own (below), and the payload goes to the engine. The result goes
   back as a synthetic event of the same kind carrying only redacted data, which a site's
   editor handles like the user's; if the site ignores it, the text is inserted into the
   field (`setRangeText`, or `insertText` in a contenteditable) and files are put in the
   site's file input. Files come back under neutral names (`redacted-N.ext`), because a
   file name can identify someone and the engine does not check names. A PDF goes back as
   its redacted PDF; its Markdown is not attached. File types the engine cannot check (SVG,
-  archives, spreadsheets) are blocked. A drag that starts inside the page is left alone.
+  archives, spreadsheets) are blocked. A drag that starts inside the page is left alone,
+  but only its own drop: one that carries exactly what that drag carried and no files.
+  The record of it ends at the next drop, `dragend` or pointerdown, and after 20 s, since
+  a page can keep `dragend` from reaching `window`.
+- File picks: the browser's chooser never opens on one of the site's file inputs, since
+  the input's events need not pass `window` (an input in no document, or in a shadow
+  root), and a site could move it out of the document while the chooser is open. A click
+  that would open one, seen on `window` (the user's, looked up inside closed shadow roots
+  with `chrome.dom.openOrClosedShadowRoot`), or a script's `click()`, `showPicker()` or
+  dispatched click caught by the main-world guard, opens Redactit's own chooser instead:
+  an input in no document that only the content script holds. The picked files are
+  redacted, and only the result goes into the site's input with an `input` and a
+  `change` event. Nobody taking the request means nothing opens. The `input` listener on
+  `window` stays as a second line, and finds a pick inside a closed shadow root.
 - Fail closed: a host that is not installed, exits, sends nothing for 2 minutes (10 for
   files, whose single OCR step reports no progress), breaks the protocol, or reports an
   error blocks the paste or upload, with an in-page notice that says why. Nothing is
@@ -437,9 +450,14 @@ are committed.
   cannot read it. They show status and reasons only, never content.
 - Main-world guard (`content/guard.js`): the one script that runs in the page's own world,
   at `document_start` on the three sites, before their scripts. It makes the site's own
-  clipboard reads and file pickers reject with `NotAllowedError`, locked against being
-  reassigned or deleted, so a site uses paste and the file input, which are intercepted.
-  What a determined page can still do is in THREAT_MODEL §5.
+  clipboard reads and file pickers reject with `NotAllowedError`, and turns a script's
+  `click()`, `showPicker()` or dispatched click on a file input (or its label, walked
+  through slots and shadow roots as the browser builds the event's path) into a request
+  for Redactit's chooser (`redactit-pick`); the redacted files come back
+  (`redactit-picked`) and it puts them in the input. Everything is locked against being
+  reassigned or deleted, and calls only the browser functions it took before any site
+  script ran. What a page set on evading it can still do (a window it reaches in the task
+  that creates it, before Chromium injects the guard there) is in THREAT_MODEL §5.
 - Adapters (`content/adapters/claude.js`, `chatgpt.js`, `gemini.js`): one file per site,
   isolated, naming only the composer and the file input. Each adapter self-checks its
   selectors for 15 s after load and disables itself (fallback only) if they are missing;
