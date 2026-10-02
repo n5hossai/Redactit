@@ -391,8 +391,12 @@ are committed.
     and cancel are shown. One file at a time; the copy gets a neutral name
     (`redacted-N.ext`).
   - Getting the copy out: Attach to chat asks the worker to hand the copy it checked to
-    the tab's composer, naming only the job (`redactit/attach {job}`, not in the worker
-    yet: the panel says it is not available). Dragging the left folder carries only
+    the tab's composer, naming only the job (`redactit/attach {job, tabId}`). The worker
+    keeps the panel's last finished file in memory for 10 minutes, until it is attached,
+    or until the panel starts another file, and only for the tab and chat it was redacted
+    for, whose pseudonym labels it carries. The tab's content script inserts the file part
+    as a redacted drop (composer, else file input) and refuses without a working adapter
+    (`insert_failed`); other refusals are `expired` and `not_allowed_site`. Dragging the left folder carries only
     `DownloadURL`, which saves the copy where it is dropped outside the browser: Chromium
     does not carry a File made in a page to another page (it arrives as its name in
     `text/plain`, which a chat would paste; recorded in `tests/e2e/test_panel.py`).

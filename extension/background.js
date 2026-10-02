@@ -54,7 +54,18 @@
  *       Extension pages only: `text` (from the AI) with the tab's chat pseudonyms replaced
  *       by their real values, using the same scope as that tab's redactions. At most 8 MiB.
  *       The result holds real values: show it in the panel, never write it into a page.
- *   redactit/review-list           -> [Review]. Extension pages only.
+ *   redactit/attach {job, tabId}   -> {ok: true} | {ok: false, code, message}. Extension
+ *       pages only. Hands the redacted file of the panel's last finished file job (`job`,
+ *       from its `accepted`) to the chat in `tabId`, through that tab's content script,
+ *       which inserts it as it would a redacted drop. Only the bytes this worker received
+ *       from the host and checked can be attached; the caller sends none. The copy is
+ *       kept in memory until attached, replaced by the panel's next file job, or 10
+ *       minutes pass, and only for the tab and chat it was redacted for. Codes: expired
+ *       (unknown, replaced, timed out, or the tab now shows another chat),
+ *       not_allowed_site, insert_failed (no adapter, or the page took nothing).
+ *       The file part goes (a PDF or image), never a PDF's Markdown; a text or Word
+ *       file's one text part is the file. At most about 48 MiB (a message's limit).
+ *   redactit/review-list          -> [Review]. Extension pages only.
  *   redactit/review-get {job}      -> Review & {text?}: the redacted text part, if any.
  *   redactit/review-decide {job, approve}  -> {ok}. approve=true hands the result to the
  *       page; false blocks it. Extension pages only, so a page cannot approve itself.
@@ -94,6 +105,8 @@ const WARM_HOLD_MS = 30_000;
  * image is a single host step with no progress in between. */
 const SILENCE_MS = { text: 120_000, file: 600_000 };
 const REVIEW_TIMEOUT_MS = 10 * 60_000;
+/** How long the panel's last copy can still be attached to its chat. */
+const ATTACH_KEEP_MS = 10 * 60_000;
 /** Reconnect delays after an unexpected disconnect, only with keepReady on. */
 const RECONNECT_MS = [1_000, 2_000, 5_000, 15_000, 60_000];
 /** The host idles out after 30 minutes; a disconnect after this much quiet is that exit,
@@ -159,6 +172,7 @@ const REASONS = {
   review_timeout: 'The review was not finished in time.',
   cancelled: 'Cancelled.',
   insert_failed: 'Redactit could not hand the redacted version to this page.',
+  expired: 'This redacted copy is no longer available for this chat. Redact the file again.',
   extension_error: 'Redactit hit an internal error.',
   internal: 'Redactit hit an internal error.',
 };
@@ -510,6 +524,7 @@ function createJob(client, msg, place, fromPage) {
   // An engine that could not start stays that way until its host exits, so each new
   // request starts a fresh host: one that works once the user has fixed the install.
   if (host.state === 'unavailable') dropHost('engine_unavailable');
+  if (!fromPage && KINDS.includes(msg.kind)) forgetAttachable(); // the panel's next file replaces it
   const now = Date.now();
   host.lastWorkAt = now;
   /** @type {Job} */
@@ -635,7 +650,81 @@ function deliver(job) {
   post(job, { op: 'result', size: r.size, total: r.total, parts: r.parts });
   job.chunks.forEach((data, seq) => post(job, { op: 'chunk', seq, total: r.total, data }));
   post(job, { op: 'done' });
+  if (!job.fromPage && KINDS.includes(job.kind)) keepForAttach(job);
   finish(job, null);
+}
+
+// --- attaching the panel's copy to its chat --------------------------------------------
+
+/**
+ * The side panel's last finished file, as the host returned it and this worker checked
+ * it, kept so redactit/attach can hand it to the chat. In memory only, never storage, and
+ * for at most ATTACH_KEEP_MS; gone once attached or when the panel starts another file.
+ * A dragged file cannot carry it: Chromium hands only the name to the page.
+ *
+ * It stays tied to the tab, site and pseudonym scope it was redacted for: its labels are
+ * that chat's, and in another chat the same [PERSON_1] stands for someone else, so the
+ * panel's re-mapping of the AI's reply there would show the wrong name.
+ * @type {{job: string, kind: string, tabId: number, site: string, scope: string,
+ *         parts: object[], size: number, chunks: string[], expiresAt: number}|null}
+ */
+let attachable = null;
+let attachTimer = null;
+
+function keepForAttach(job) {
+  forgetAttachable();
+  attachable = { job: job.id, kind: job.kind, tabId: job.tabId, site: job.site, scope: job.scope,
+    parts: job.result.parts, size: job.result.size, chunks: job.chunks, expiresAt: Date.now() + ATTACH_KEEP_MS };
+  attachTimer = setTimeout(forgetAttachable, ATTACH_KEEP_MS);
+}
+
+function forgetAttachable() {
+  clearTimeout(attachTimer);
+  attachTimer = null;
+  attachable = null;
+}
+
+/** The part a chat gets: the file (a PDF or image; never a PDF's Markdown beside it), or
+ * for a text or Word file, its one text part, which is the redacted file. */
+const ATTACH_TYPES = { 'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg',
+  'text/markdown': 'md', 'text/plain': 'txt' };
+
+async function attachToChat(msg) {
+  const fail = (code) => ({ ok: false, code, message: reasonFor(code) });
+  const kept = attachable;
+  if (!kept || typeof msg.job !== 'string' || kept.job !== msg.job || Date.now() >= kept.expiresAt) {
+    return fail('expired');
+  }
+  let tab;
+  try {
+    tab = Number.isInteger(msg.tabId) ? await chrome.tabs.get(msg.tabId) : null;
+  } catch {
+    tab = null;
+  }
+  const url = safeUrl(tab?.url); // Chrome shows a tab's URL only on our three sites
+  const site = url && siteOf(url.origin);
+  if (!site) return fail('not_allowed_site');
+  await scopesLoaded;
+  if (msg.tabId !== kept.tabId || site !== kept.site || scopeFor(site, url, msg.tabId) !== kept.scope) {
+    return fail('expired'); // another tab or another chat now: its labels would mean other people
+  }
+  const index = kept.parts.findIndex((p) => p.name === 'file');
+  const part = kept.parts[index >= 0 ? index : 0];
+  const ext = ATTACH_TYPES[part.media_type];
+  if (!ext || (index < 0 && kept.parts.length !== 1)) return fail('insert_failed');
+  const at = kept.parts.slice(0, kept.parts.indexOf(part)).reduce((n, p) => n + p.size, 0);
+  const bytes = fromB64Chunks(kept.chunks, kept.size).subarray(at, at + part.size);
+  let answer;
+  try {
+    answer = await chrome.tabs.sendMessage(msg.tabId,
+      { type: 'redactit/insert', name: `redacted.${ext}`, media_type: part.media_type, data: toB64(bytes) },
+      { frameId: 0 });
+  } catch {
+    answer = null; // no content script there (the page is still loading, or was never ours)
+  }
+  if (!answer || answer.ok !== true) return fail('insert_failed');
+  if (attachable === kept) forgetAttachable();
+  return { ok: true };
 }
 
 /** Drops a request here and at the host. */
@@ -987,6 +1076,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       return job && job.review ? { ...reviewOf(job), text: reviewText(job) } : null;
     },
     'redactit/review-decide': () => ({ ok: decideReview(msg.job, msg.approve === true) }),
+    'redactit/attach': () => attachToChat(msg),
   };
   let handler = handlers[type] || panelHandlers[type];
   if (!handler) return false;
