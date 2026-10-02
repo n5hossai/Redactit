@@ -246,6 +246,7 @@ textarea:focus-visible { outline-offset: 0; border-color: var(--focus); }
 
 /* Review queue */
 .reviews { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.reviews:empty { display: none; }
 .review { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--hair); border-radius: 10px; background: var(--face); min-width: 0; }
 .review-top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .review-what { font-weight: 600; font-size: 13.5px; }
