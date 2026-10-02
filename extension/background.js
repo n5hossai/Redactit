@@ -359,7 +359,7 @@ function onStatus(msg) {
     const resolve = pings.get(msg.id);
     pings.delete(msg.id);
     resolve?.(msg.state);
-    if (!resolve) return dropHost('protocol');
+    if (!resolve && !closedIds.has(msg.id)) return dropHost('protocol'); // a late answer is fine
   }
   const before = host.state;
   host.state = msg.state;
@@ -403,7 +403,9 @@ function pingHost() {
   return new Promise((resolve) => {
     pings.set(id, resolve);
     setTimeout(() => {
-      if (pings.delete(id)) resolve(null);
+      if (!pings.delete(id)) return;
+      remember(closedIds, id, 256);
+      resolve(null);
     }, 5_000);
     try {
       sendHost({ type: 'ping', id });
