@@ -49,6 +49,40 @@ def secret_file(tmp_path):
     return path
 
 
+def test_a_paste_whose_text_went_in_but_whose_file_could_not_says_so(setup):
+    """Text and an image pasted together into a page with no working adapter: the redacted
+    text goes into the field, and the image has nowhere to go. The notice says what went
+    in, never that nothing was sent. The scripted host (stubhost.js) redacts."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    out = io.BytesIO()
+    Image.new("RGB", (40, 20), (200, 200, 200)).save(out, "PNG")
+    s = setup(adapter_check_ms=1000)
+    b = s.browser
+    b.stub_host("redact", replace={NAME: "[PERSON_1]"}, files={"image": base64.b64encode(out.getvalue()).decode()})
+    page = b.open("https://chatgpt.com/")  # the stand-in matches none of the adapter's selectors
+    tab = b.evaluate("chrome.tabs.query({url: 'https://chatgpt.com/*'}).then(([t]) => t.id)")
+    wait_for(lambda: b.evaluate(f"pageAdapters.get({tab})?.active === false"))
+    helper = b.open("https://clipboard-helper.test/")
+    b.context.grant_permissions(["clipboard-read", "clipboard-write"], origin="https://clipboard-helper.test")
+    helper.bring_to_front()
+    helper.evaluate("""async ([text, png]) => {
+      const bytes = Uint8Array.from(atob(png), (c) => c.charCodeAt(0));
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/plain': new Blob([text], {type: 'text/plain'}), 'image/png': new Blob([bytes], {type: 'image/png'})})]);
+    }""", [f"Call {NAME}.", base64.b64encode(out.getvalue()).decode()])
+    page.bring_to_front()
+    page.click("#plain")
+    page.keyboard.press("Control+V")
+    assert wait_for(lambda: page.input_value("#plain")) == "Call [PERSON_1]."
+    text = notice(s, page, "blocked")
+    assert "1 of 2 items" in text and "The rest were added" in text and "Nothing was" not in text
+    assert NAME not in page_view(page)
+
+
 def test_without_a_host_the_paste_and_the_upload_are_blocked(setup, secret_file):
     s = setup(host=None)  # never registered: Chrome cannot find it
     page = s.browser.open(CHAT)

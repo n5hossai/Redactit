@@ -366,7 +366,8 @@
 
   /**
    * Redacts every item, then hands the page the ones that came back, in one event. An
-   * item that is blocked is left out; the rest still go in.
+   * item that is blocked is left out; the rest still go in. The notice counts what really
+   * went in: text the page took is never reported as "nothing was sent".
    */
   async function handle(req) {
     const items = (req.text ? 1 : 0) + req.files.length;
@@ -376,6 +377,7 @@
     const slow = setTimeout(() => task.shown || notice.show('info', `Redactit is checking ${what}…`, task),
       SLOW_NOTICE_MS);
     const blocked = [];
+    let passed = 0;
     let text = '';
     const files = [];
     try {
@@ -395,19 +397,27 @@
           blocked.push(asBlocked(e));
         }
       }
-      if ((text || files.length) && !insert(req, text, files)) throw new Blocked('insert_failed');
+      if (text || files.length) {
+        const went = insert(req, text, files);
+        const failed = (text && !went.text ? 1 : 0) + (files.length && !went.files ? files.length : 0);
+        passed = (text ? 1 : 0) + files.length - failed;
+        for (let i = 0; i < failed; i += 1) blocked.push(new Blocked('insert_failed'));
+      }
     } catch (e) {
-      blocked.splice(0, blocked.length, asBlocked(e));
+      blocked.push(asBlocked(e));
     } finally {
       clearTimeout(slow);
     }
     if (!blocked.length) return notice.hide(task);
+    // Insert failures last: the reason a user can act on (a file type, a host) comes first.
+    blocked.sort((a, b) => (a.code === 'insert_failed') - (b.code === 'insert_failed'));
     const reason = blocked[0].reason;
-    const passed = items - blocked.length;
-    if (passed > 0 && blocked[0].code !== 'insert_failed') {
-      return notice.show('block', `Redactit blocked ${blocked.length} of ${items} items. ${reason} The rest were added.`);
+    if (passed > 0) {
+      const count = items - passed;
+      return notice.show('block', `Redactit blocked ${count} of ${items} items. ${reason} The rest were added.`);
     }
-    return notice.show('block', `Redactit blocked ${what}. ${reason} Nothing was sent to the site.`);
+    const tail = blocked[0].code === 'insert_failed' ? 'Nothing was added.' : 'Nothing was sent to the site.';
+    return notice.show('block', `Redactit blocked ${what}. ${reason} ${tail}`);
   }
 
   function asBlocked(e) {
@@ -580,13 +590,15 @@
    * synthetic paste or drop carrying only them. A site that handles pastes itself (most
    * rich editors) takes it from there. If it ignores the event, we do what the browser
    * would have done: insert the text, or put the files in the site's file input.
+   * @returns {{text: boolean, files: boolean}} whether the text, and the files, went in
    */
   function insert(req, text, files) {
-    if (req.how === 'pick') return req.deliver(files);
-    if (req.how === 'input') return setFiles(req.target, files);
+    const both = (ok) => ({ text: ok, files: ok });
+    if (req.how === 'pick') return both(attempt(() => req.deliver(files)));
+    if (req.how === 'input') return both(attempt(() => setFiles(req.target, files)));
     let target = req.target instanceof Element && req.target.isConnected ? req.target : null;
     if (req.how === 'paste') target = target || composer();
-    if (!target) return false;
+    if (!target) return both(false);
     const data = new DataTransfer();
     if (text) data.setData('text/plain', text);
     for (const file of files) data.items.add(file);
@@ -597,11 +609,20 @@
       : new DragEvent('drop', { ...init, dataTransfer: data, clientX: req.point[0], clientY: req.point[1] });
     ours.add(event);
     target.dispatchEvent(event);
-    if (event.defaultPrevented) return true;
-    let ok = true;
-    if (text) ok = insertText(editableOf(target) || composer(), text);
-    if (files.length) ok = setFiles(fileInput(), files) && ok;
-    return ok;
+    if (event.defaultPrevented) return both(true);
+    return {
+      text: !text || attempt(() => insertText(editableOf(target) || composer(), text)),
+      files: !files.length || attempt(() => setFiles(fileInput(), files)),
+    };
+  }
+
+  /** `step()`'s answer, with a throw counted as false: one failed step leaves the other. */
+  function attempt(step) {
+    try {
+      return step() === true;
+    } catch {
+      return false;
+    }
   }
 
   function insertText(el, text) {
@@ -770,7 +791,7 @@
       const target = composer();
       if (ext && typeof msg.data === 'string' && adapter && adapterActive && target) {
         const file = new File([fromB64(msg.data)], `redacted-${(fileNumber += 1)}.${ext}`, { type: msg.media_type });
-        ok = insert({ how: 'drop', target, point: centre(target), caret: null }, '', [file]);
+        ok = insert({ how: 'drop', target, point: centre(target), caret: null }, '', [file]).files;
       }
     } catch {
       ok = false;
