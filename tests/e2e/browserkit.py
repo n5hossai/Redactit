@@ -226,6 +226,15 @@ class Browser:
             cdp.send("Input.dispatchDragEvent", {"type": kind, "x": x, "y": y, "data": data})
         cdp.detach()
 
+    def panel(self):
+        """The side panel's page, open in a tab: an extension page, as the panel is."""
+        return self.open(f"{ORIGIN}sidepanel/panel.html")
+
+    @staticmethod
+    def api(page, message: dict):
+        """One message to the service worker's API, sent from `page`."""
+        return page.evaluate("m => chrome.runtime.sendMessage(m)", message)
+
     def recent(self) -> list[dict]:
         """What the service worker records per request: kind, site, held, outcome."""
         return self.worker.evaluate("recent")

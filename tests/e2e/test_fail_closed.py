@@ -8,6 +8,7 @@ These use no models: the hosts here are missing or stand-ins (fakehost.py).
 import os
 import signal
 import sys
+import time
 
 import pytest
 
@@ -89,6 +90,34 @@ def test_a_paste_held_past_the_warm_up_limit_is_blocked(setup, needs_registry):
     types = [f["type"] for f in s.registration.frames()]
     assert types == ["redact_text", "chunk", "cancel"]  # sent at once, then withdrawn at the deadline
     assert_page_saw_nothing(page)
+
+
+def test_cancel_from_the_panel_blocks_the_paste_and_tells_the_host(setup, needs_registry):
+    s = setup(host="hang")
+    page = s.browser.open(CHAT)
+    s.browser.paste(page, ".ProseMirror", PASTE)
+    wait_for(lambda: [f for f in s.registration.frames() if f["type"] == "chunk"])
+    job = s.browser.evaluate("[...jobs.keys()][0]")
+    assert s.browser.api(s.browser.panel(), {"type": "redactit/cancel", "job": job}) == {"ok": True}
+    assert s.browser.wait_recent(1)[0]["code"] == "cancelled"
+    wait_for(lambda: [f for f in s.registration.frames() if f == {"type": "cancel", "id": job}])
+    assert_page_saw_nothing(page)
+
+
+def test_keep_ready_starts_the_host_at_page_load_and_reconnects_after_a_crash(setup, needs_registry):
+    s = setup(host="hang")
+    s.browser.open(CHAT)
+    time.sleep(2)
+    assert not s.registration.pid_file.exists()  # by default the host waits for the first paste
+    s.browser.evaluate("chrome.storage.local.set({keepReady: true})")
+    s.browser.open(CHAT)  # a page load with "Keep Redactit ready" on
+    first = s.registration.pid()
+    s.registration.pid_file.unlink()
+    kill(first)
+    assert s.registration.pid() != first  # started again with no paste waiting
+    status = s.browser.api(s.browser.panel(), {"type": "redactit/status"})
+    assert status["settings"]["keepReady"] is True
+    assert status["state"] in ("starting", "warming", "ready-text", "ready-all")
 
 
 @pytest.mark.parametrize(("mode", "code", "says"), [
