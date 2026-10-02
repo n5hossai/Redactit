@@ -404,7 +404,9 @@ are committed.
     or until the panel starts another file, and only for the tab and chat it was redacted
     for, whose pseudonym labels it carries. The tab's content script inserts the file part
     as a redacted drop (composer, else file input) and refuses without a working adapter
-    (`insert_failed`); other refusals are `expired` and `not_allowed_site`. The policy's
+    (`insert_failed`); other refusals are `expired`, `not_allowed_site`, and
+    `too_large_to_attach` for a copy over 48 MiB, the most one message to the tab carries,
+    checked before anything else is done with it, whose reason says to download it. The policy's
     review applies here as to a page's paste: a copy it would hold (`always`, or
     `low_confidence` with decisions marked) is refused with `review_required` until the
     panel has shown it (the text, the image, or the PDF itself and its page text) and the

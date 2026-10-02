@@ -108,6 +108,21 @@ def test_the_panel_shows_the_copy_and_attaches_only_after_approve(setup, tmp_pat
     assert panel.is_hidden("#attachReview")
 
 
+def test_a_copy_too_large_for_a_message_is_refused_with_its_own_reason(setup, tmp_path):
+    """The file goes to the tab in one message; one larger than that can carry is refused
+    before anything is sent, with a reason that says to download it, also under review."""
+    s, chat, panel, job, tab = prepared(setup, tmp_path, stub={"reviewMode": "always"},
+                                        max_message_file=len(REDACTED) - 1)
+    answer = attach(s, panel, job, tab)
+    assert (answer["ok"], answer["code"]) == (False, "too_large_to_attach")
+    assert "Download it instead" in answer["message"]
+    panel.bring_to_front()
+    panel.click("#attachBtn")
+    wait_for(lambda: "Download it instead" in panel.inner_text("#resultNote"))
+    assert panel.is_hidden("#attachReview")
+    assert chat.evaluate("window.__attachments.length") == 0
+
+
 def test_an_unknown_replaced_or_timed_out_job_is_refused(setup, tmp_path):
     s, chat, panel, job, tab = prepared(setup, tmp_path, attach_keep_ms=3000)
     assert attach(s, panel, "j-unknown", tab)["code"] == "expired"

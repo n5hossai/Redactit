@@ -68,7 +68,8 @@
  *       it would a page's (see Review), so the panel shows it and sends approve: true only
  *       on the user's explicit approval.
  *       The file part goes (a PDF or image), never a PDF's Markdown; a text or Word
- *       file's one text part is the file. At most about 48 MiB (a message's limit).
+ *       file's one text part is the file. At most MAX_MESSAGE_FILE (48 MiB, a message's
+ *       limit): a larger one is refused first, with too_large_to_attach.
  *   redactit/review-list          -> [Review]. Extension pages only.
  *   redactit/review-get {job}      -> Review & {text?, file?, fileType?, fileTooLarge?}:
  *       extension pages only. The redacted text part, and the file part (a PDF or image)
@@ -185,6 +186,8 @@ const REASONS = {
   insert_failed: 'Redactit could not hand the redacted version to this page.',
   expired: 'This redacted copy is no longer available for this chat. Redact the file again.',
   review_required: "Your organization's policy asks you to review this copy before it goes to the chat.",
+  too_large_to_attach: 'This redacted copy is larger than 48 MiB, too large to attach from here. Download it instead, '
+    + 'then add it to the chat.',
   extension_error: 'Redactit hit an internal error.',
   internal: 'Redactit hit an internal error.',
 };
@@ -721,14 +724,17 @@ async function attachToChat(msg) {
   if (msg.tabId !== kept.tabId || site !== kept.site || scopeFor(site, url, msg.tabId) !== kept.scope) {
     return fail('expired'); // another tab or another chat now: its labels would mean other people
   }
-  // The policy's review applies to what reaches a chat, however it gets there: a copy the
-  // policy would hold goes in only once the panel has shown it and the user approved.
-  const reason = reviewReason(kept.review);
-  if (reason && msg.approve !== true) return { ...fail('review_required'), reason };
   const index = kept.parts.findIndex((p) => p.name === 'file');
   const part = kept.parts[index >= 0 ? index : 0];
   const ext = ATTACH_TYPES[part.media_type];
   if (!ext || (index < 0 && kept.parts.length !== 1)) return fail('insert_failed');
+  // One message carries the file to the tab; checked first, so a copy that cannot go is
+  // never put up for review and the user is told to download it.
+  if (part.size > MAX_MESSAGE_FILE) return fail('too_large_to_attach');
+  // The policy's review applies to what reaches a chat, however it gets there: a copy the
+  // policy would hold goes in only once the panel has shown it and the user approved.
+  const reason = reviewReason(kept.review);
+  if (reason && msg.approve !== true) return { ...fail('review_required'), reason };
   const at = kept.parts.slice(0, kept.parts.indexOf(part)).reduce((n, p) => n + p.size, 0);
   const bytes = fromB64Chunks(kept.chunks, kept.size).subarray(at, at + part.size);
   let answer;
