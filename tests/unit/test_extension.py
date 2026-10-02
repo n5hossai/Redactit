@@ -119,6 +119,24 @@ def test_real_values_have_no_path_to_a_content_script():
         assert "redactit/remap" not in code and "redactit/review-" not in code, path.name
 
 
+def test_attach_hands_only_host_checked_files_to_a_page():
+    """redactit/attach: panel-only, keeps only the panel's file jobs' results (never a remap
+    or text), in memory, and the caller sends no bytes; the page side takes it only from
+    the worker, in the top frame."""
+    bg = (EXT / "background.js").read_text(encoding="utf-8")
+    panel_only = re.search(r"const panelHandlers = \{(.*?)\n  \};", bg, re.S).group(1)
+    assert "'redactit/attach': () => attachToChat(msg)" in panel_only and bg.count("'redactit/attach'") == 1
+    assert "if (!job.fromPage && KINDS.includes(job.kind)) keepForAttach(job);" in bg
+    assert "'remap'" not in json.dumps(re.findall(r"const KINDS = \[.*?\];", bg))
+    attach = re.search(r"async function attachToChat\(msg\) \{(.*?)\n\}", bg, re.S).group(1)
+    assert "msg.data" not in attach and "msg.bytes" not in attach  # only the kept, checked bytes
+    assert "fromB64Chunks(kept.chunks" in attach and "{ frameId: 0 }" in attach
+    assert "chrome.storage" not in re.search(r"let attachable = null;(.*?)async function attachToChat", bg, re.S).group(1)
+    intercept = _code(EXT / "content" / "intercept.js")
+    assert "sender.id !== chrome.runtime.id || sender.tab" in intercept
+    assert "if (window === window.top) {" in intercept
+
+
 def test_the_main_world_guard_locks_what_it_replaces():
     guard = _code(EXT / "content" / "guard.js")
     assert "writable: false, enumerable: true, configurable: false" in guard

@@ -75,11 +75,13 @@ def _rewrite(path: Path, old: str, new: str) -> None:
 
 
 def build_extension(dest: Path, host_name: str, *, warm_hold_ms: int | None = None,
-                    adapter_check_ms: int | None = None) -> Path:
+                    adapter_check_ms: int | None = None, attach_keep_ms: int | None = None) -> Path:
     shutil.copytree(EXTENSION, dest)
     _rewrite(dest / "background.js", "const HOST_NAME = 'com.redactit.host';", f"const HOST_NAME = '{host_name}';")
     if warm_hold_ms is not None:
         _rewrite(dest / "background.js", "const WARM_HOLD_MS = 30_000;", f"const WARM_HOLD_MS = {warm_hold_ms};")
+    if attach_keep_ms is not None:
+        _rewrite(dest / "background.js", "const ATTACH_KEEP_MS = 10 * 60_000;", f"const ATTACH_KEEP_MS = {attach_keep_ms};")
     if adapter_check_ms is not None:
         _rewrite(dest / "content" / "intercept.js", "const ADAPTER_CHECK_MS = 15_000;",
                  f"const ADAPTER_CHECK_MS = {adapter_check_ms};")

@@ -507,6 +507,50 @@
     }
   }
 
+  // --- attaching the side panel's copy ----------------------------------------------------
+
+  /** What the worker may hand over, and the extension each keeps (never one from a name). */
+  const INSERT_TYPES = { 'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg',
+    'text/markdown': 'md', 'text/plain': 'txt' };
+
+  /**
+   * The side panel's "Attach to chat": the service worker sends the copy it got from the
+   * host and checked (redactit/attach in background.js), and it goes in as a redacted drop
+   * would, on the composer, else into the site's file input, under a neutral name. Only
+   * the worker can send this (a page cannot reach chrome.runtime), and only in the top
+   * frame. Without a working adapter there is no known composer, so it is refused.
+   */
+  function onInsert(msg, sender, reply) {
+    if (!msg || msg.type !== 'redactit/insert' || sender.id !== chrome.runtime.id || sender.tab) return false;
+    const ext = INSERT_TYPES[msg.media_type];
+    let ok = false;
+    try {
+      recheckAdapter();
+      const target = composer();
+      if (ext && typeof msg.data === 'string' && adapter && adapterActive && target) {
+        const file = new File([fromB64(msg.data)], `redacted-${(fileNumber += 1)}.${ext}`, { type: msg.media_type });
+        ok = insert({ how: 'drop', target, point: centre(target), caret: null }, '', [file]);
+      }
+    } catch {
+      ok = false;
+    }
+    reply(ok ? { ok: true } : { ok: false, code: 'insert_failed' });
+    return false;
+  }
+
+  function centre(el) {
+    const box = el.getBoundingClientRect();
+    return [box.left + box.width / 2, box.top + box.height / 2];
+  }
+
+  if (window === window.top) {
+    try {
+      chrome.runtime.onMessage.addListener(onInsert);
+    } catch {
+      // the extension was reloaded under this page
+    }
+  }
+
   report(); // at load: starts the host early when "Keep Redactit ready" is on
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', selfCheck, { once: true });
   else selfCheck();
