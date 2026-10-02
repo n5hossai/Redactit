@@ -159,7 +159,7 @@ def test_an_adapter_whose_selectors_are_missing_falls_back_and_still_redacts(env
     assert_no_raw(page_view(other))
 
 
-def test_the_panel_redacts_text_and_sees_the_hosts_review_mode(env, chat):
+def test_the_panel_redacts_text_and_remaps_a_reply_with_the_tabs_scope(env, chat):
     b = env.browser
     panel = b.panel()
     tab = b.evaluate("chrome.tabs.query({url: 'https://claude.ai/*'}).then(([t]) => t.id)")
@@ -168,6 +168,14 @@ def test_the_panel_redacts_text_and_sees_the_hosts_review_mode(env, chat):
     assert_no_raw(out["text"])
     status = b.api(panel, {"type": "redactit/status"})
     assert status["reviewMode"] in ("always", "low_confidence") and "reviewMode" not in status["settings"]
+
+    reply = "Sure, I will write to [PERSON_1] at [EMAIL_1]."
+    back = b.api(panel, {"type": "redactit/remap", "text": reply, "tabId": tab})
+    assert back == {"ok": True, "text": f"Sure, I will write to {NAME} at {EMAIL}."}
+    b.open("https://claude.ai/chat/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0")  # a chat nothing was redacted in
+    other = b.evaluate("chrome.tabs.query({url: 'https://claude.ai/chat/*'}).then(([t]) => t.id)")
+    assert b.api(panel, {"type": "redactit/remap", "text": reply, "tabId": other})["text"] == reply
+    assert_no_raw(page_view(chat))  # the real values went to the panel only
 
 
 def test_with_the_guard_in_place_a_normal_paste_still_arrives_redacted(env, chat):

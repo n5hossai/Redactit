@@ -101,9 +101,10 @@ class Host:
         """Header plus chunks; `chunks` stops early to leave an upload unfinished."""
         native = self.native
         total = native.chunk_count(len(payload))
-        header = {"type": "redact_text" if kind == "text" else "redact_file", "id": rid, "scope": scope,
+        types = {"text": "redact_text", "remap": "remap"}
+        header = {"type": types.get(kind, "redact_file"), "id": rid, "scope": scope,
                   "site": site, "size": len(payload), "total": total}
-        if kind != "text":
+        if kind not in types:
             header["kind"] = kind
         self.send(header)
         for seq in range(total if chunks is None else chunks):

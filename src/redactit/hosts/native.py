@@ -9,8 +9,9 @@ Extension to host                                           Host to extension
   ping        {id}                                            status    {id|null, state, version, protocol,
   redact_text {id, scope, site, size, total} + chunks                    review_mode}
   redact_file {id, scope, site, kind, size, total} + chunks   progress  {id, stage[, page, pages]}
-  chunk       {id, seq, total, data}                          result    {id, size, total, parts, review} + chunks
-  cancel      {id}                                            error     {id|null, code, message}
+  remap       {id, scope, site, size, total} + chunks         result    {id, size, total, parts, review} + chunks
+  chunk       {id, seq, total, data}                          error     {id|null, code, message}
+  cancel      {id}
 
 Every message is a JSON object with a `type` and exactly the fields above. A payload (text
 as UTF-8, a file as it is) travels as base64 chunks of RAW_CHUNK bytes numbered from 0;
@@ -22,9 +23,12 @@ Markdown, say) are concatenated, chunked the same way, and split again by their 
 load). Requests are answered in arrival order; one that arrives while warming waits. An
 error's message is fixed text or a RedactitError's, so it never quotes the input.
 
-Protocol 2 adds review. `review_mode` is the loaded policy's review mode, "always" or
-"low_confidence" (null until the engine has loaded). A result's `review` is {needed,
-count}: how many of the engine's decisions for that input need review, counts only.
+Protocol 2 adds review and re-mapping. `review_mode` is the loaded policy's review mode,
+"always" or "low_confidence" (null until the engine has loaded). A result's `review` is
+{needed, count}: how many of the engine's decisions for that input need review, counts
+only. `remap` sends text from the AI back with this scope's pseudonyms replaced by the
+real values in the vault; its result is one text part. That text holds real values, so
+the extension must hand it only to its side panel, never to a site's page (THREAT_MODEL T6).
 
 An error's `code` is one of MESSAGES' keys and stays stable across versions. A request
 that fails is answered with exactly one error and no result. Among them: engine_unavailable
@@ -115,6 +119,7 @@ SCHEMA = {
     "cancel": {"id": _text(_ID)},
     "redact_text": _REQUEST,
     "redact_file": {**_REQUEST, "kind": lambda v: isinstance(v, str) and v in KINDS},
+    "remap": _REQUEST,
     "chunk": {"id": _text(_ID), "seq": _count(0), "total": _count(1),
               "data": lambda v: isinstance(v, str) and len(v) <= CHUNK},
 }
@@ -172,7 +177,7 @@ class Job:
     """One request: its chunks while they arrive, then its place in the queue."""
 
     id: str
-    kind: str  # "text" for redact_text, else one of KINDS
+    kind: str  # "text" for redact_text, "remap" for remap, else one of KINDS
     scope: str
     site: str
     size: int
@@ -183,7 +188,8 @@ class Job:
 
     @classmethod
     def start(cls, msg: dict) -> "Job":
-        job = cls(msg["id"], msg.get("kind", "text"), msg["scope"], msg["site"], msg["size"], msg["total"])
+        kind = msg.get("kind", "remap" if msg.get("type") == "remap" else "text")
+        job = cls(msg["id"], kind, msg["scope"], msg["site"], msg["size"], msg["total"])
         if job.total != chunk_count(job.size):
             raise Reject("bad_sequence", rid=job.id)
         return job
@@ -456,7 +462,11 @@ class Host:
         self._progress(job.id, "redacting")
         counted = _ReviewCount(self._engine)
         try:
-            parts = self._redact(job, counted)
+            if job.kind == "remap":
+                text = self._engine.remap(job.payload().decode("utf-8"), job.scope, site=job.site)
+                parts = [("text", "text/plain", text.encode("utf-8"))]
+            else:
+                parts = self._redact(job, counted)
             if job.cancelled:
                 raise _Cancelled
         except _Cancelled:

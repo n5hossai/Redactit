@@ -121,6 +121,13 @@ _EVENT_FIELDS: dict[str, dict[str, Callable[[Any], bool]]] = {
     "review_decision": {"rule_id": _is_rule_id, "action": _is_action, "approved": _is_bool},
     "upload_blocked": {"destination": _is_destination, "reason_code": _is_reason_code},
     "vault_purge": {"purged_count": _is_count, "retention_days": _is_count},
+    # Pseudonyms turned back into real values for the side panel: counts and types only.
+    "remap": {
+        "site": _is_destination,
+        "label_count": _is_count,
+        "restored_count": _is_count,
+        "entity_counts": _is_entity_counts,
+    },
     # The redacted-copy purge (copies.py): counts only, since a copy's name can be sensitive.
     "copies_purge": {
         "purged_count": _is_count,

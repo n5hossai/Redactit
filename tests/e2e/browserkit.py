@@ -312,6 +312,26 @@ GUARD_REFUSED = {"readText": "NotAllowedError+", "read": "NotAllowedError+", "pi
                  "assigned": "showOpenFilePicker", "after": "NotAllowedError+"}
 
 
+def content_script_eval(context, page, expression: str, timeout: float = 30):
+    """Runs `expression` in Redactit's content-script world of `page`'s main frame, through
+    DevTools, and returns its (awaited) value: what a content script, or a page that took
+    one over, could get from the service worker."""
+    cdp = context.new_cdp_session(page)
+    contexts: list[dict] = []
+    cdp.on("Runtime.executionContextCreated", lambda event: contexts.append(event["context"]))
+    try:
+        cdp.send("Runtime.enable")  # reports the frame's existing worlds as events
+        world = wait_for(lambda: next((c for c in contexts if c.get("origin", "").startswith(ORIGIN.rstrip("/"))
+                                       and c.get("auxData", {}).get("type") == "isolated"
+                                       and c.get("auxData", {}).get("isDefault") is False), None), timeout=timeout)
+        out = cdp.send("Runtime.evaluate", {"expression": expression, "contextId": world["id"],
+                                            "awaitPromise": True, "returnByValue": True})
+    finally:
+        cdp.detach()
+    assert "exceptionDetails" not in out, out.get("exceptionDetails")
+    return out["result"].get("value")
+
+
 def notice_text(context, page) -> str:
     """The text of Redactit's in-page notice, read through DevTools, which can see into a
     closed shadow root; the page itself cannot."""

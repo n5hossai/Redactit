@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import re
+from collections import Counter
+
 from redactit.types import Decision
 from redactit.vault import Vault
+
+# A label as `Pseudonymizer.label` writes it: "[PERSON_1]", "[CREDIT_CARD_12]".
+LABEL = re.compile(r"\[([A-Z](?:[A-Z_]{0,30}[A-Z])?)_([1-9][0-9]{0,8})\]")
 
 
 class Pseudonymizer:
@@ -36,6 +42,28 @@ def splice(text: str, decisions: list[Decision], subs: list[str]) -> str:
         out.append(text[pos:d.span.start] + sub)
         pos = d.span.end
     return "".join(out) + text[pos:]
+
+
+def remap(text: str, vault: Vault, scope: str) -> tuple[str, int, Counter]:
+    """`text` with each of this scope's labels replaced by the value it stands for.
+
+    Only labels the vault holds for `scope` are replaced; any other "[TYPE_N]" (another
+    chat's, a purged one, or one the AI made up) stays as it is. Returns the text, the
+    number of labels seen, and how many were restored per type, for the audit log.
+    """
+    restored: Counter = Counter()
+    seen = 0
+
+    def real(m: re.Match) -> str:
+        nonlocal seen
+        seen += 1
+        value = vault.value_for(scope, m.group(1), int(m.group(2)))
+        if value is None:
+            return m.group(0)
+        restored[m.group(1)] += 1
+        return value
+
+    return LABEL.sub(real, text), seen, restored
 
 
 def _replacement(d: Decision, original: str, pz: Pseudonymizer) -> str:

@@ -1,8 +1,10 @@
-"""The page's own ways around interception are closed: the main-world guard
-(extension/content/guard.js).
+"""The page's own ways around interception are closed, and real values have no path to a
+page: the main-world guard (extension/content/guard.js) and T6 in the service worker.
 
 No host is needed: everything here is refused or intercepted before one would be asked.
 """
+
+import json
 
 import pytest
 
@@ -35,3 +37,27 @@ def test_the_page_cannot_read_the_clipboard_or_open_files_itself(setup):
     assert b.wait_recent(1)[0]["code"] == "host_missing"
     wait_for(lambda: "Nothing was sent" in notice_text(b.context, chat))
     assert not [v for v in (NAME, EMAIL) if v in page_view(chat)]
+
+
+def test_a_content_script_cannot_reach_real_values(setup):
+    """T6: from the content script's own world (as a page that took it over would be),
+    re-mapping, the review queue and a remap job are all refused."""
+    s = setup(host=None)
+    chat = s.browser.open(CHAT)
+    tab = s.browser.evaluate("chrome.tabs.query({url: 'https://claude.ai/*'}).then(([t]) => t.id)")
+    for message in ({"type": "redactit/remap", "text": "[PERSON_1]", "tabId": tab},
+                    {"type": "redactit/review-list"}, {"type": "redactit/review-get", "job": "x"},
+                    {"type": "redactit/review-decide", "job": "x", "approve": True}):
+        answer = browserkit.content_script_eval(s.browser.context, chat,
+                                                f"chrome.runtime.sendMessage({json.dumps(message)})")
+        assert answer["ok"] is False and answer["code"] == "not_allowed", message["type"]
+    port = browserkit.content_script_eval(s.browser.context, chat, """new Promise((resolve) => {
+        const port = chrome.runtime.connect({name: 'redactit/job'});
+        port.onMessage.addListener((m) => resolve(m));
+        port.postMessage({op: 'start', kind: 'remap', size: 10, total: 1});
+    })""")
+    assert port["op"] == "blocked" and port["code"] == "extension_error"
+    # The same request from the side panel's page is allowed (and fails only for want of a host).
+    panel = s.browser.panel()
+    answer = s.browser.api(panel, {"type": "redactit/remap", "text": "[PERSON_1]", "tabId": tab})
+    assert answer["ok"] is False and answer["code"] == "host_missing"

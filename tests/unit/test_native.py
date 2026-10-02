@@ -49,6 +49,7 @@ def rejected(raw: bytes) -> Reject:
     {"type": "cancel", "id": "r1"},
     header(),
     {**header(), "type": "redact_file", "kind": "pdf"},
+    {**header(), "type": "remap"},
     chunk(0, b"abc", 1),
 ])
 def test_every_message_type_parses(msg):
@@ -187,6 +188,7 @@ class StubEngine:
         self.policy = SimpleNamespace(review=SimpleNamespace(mode=review_mode))
         self.flags = flags  # needs_review of each decision a redact call returns
         self.sites = []
+        self.remapped = []
 
     def warm_text(self):
         if self.text_fails:
@@ -202,6 +204,10 @@ class StubEngine:
             raise self.redact_raises
         return SimpleNamespace(text=text.replace(SECRET, "[PERSON_1]"),
                                decisions=[SimpleNamespace(needs_review=f) for f in self.flags])
+
+    def remap(self, text, scope, *, site=None):
+        self.remapped.append((scope, site))
+        return text.replace("[PERSON_1]", "the person")  # a stand-in value: SECRET must not cross the wire
 
 
 class Wire:
@@ -227,7 +233,7 @@ class Wire:
         native._write_all(self._sender, native._frame(msg))
 
     def request(self, rid, kind, payload: bytes, site="claude.ai"):
-        types = {"text": "redact_text"}
+        types = {"text": "redact_text", "remap": "remap"}
         header = {"type": types.get(kind, "redact_file"), "id": rid, "scope": "s1",
                   "site": site, "size": len(payload), "total": 1}
         if kind not in types:
@@ -379,3 +385,21 @@ def test_a_files_review_count_covers_every_engine_call_the_format_makes(wire, mo
     w = wire(lambda: StubEngine(flags=(True, False)))
     w.request("f1", "pdf", PAYLOADS["pdf"])
     assert w.outcome("f1")["review"] == {"needed": True, "count": 2}
+
+
+def test_remap_returns_the_scopes_real_values_as_one_text_part(wire):
+    engine = StubEngine(flags=(True,))
+    w = wire(lambda: engine)
+    w.request("m1", "remap", b"Tell [PERSON_1] the plan.", site="claude.ai")
+    result = w.outcome("m1")
+    assert result["parts"] == [{"name": "text", "media_type": "text/plain", "size": len("Tell the person the plan.")}]
+    assert result["review"] == {"needed": False, "count": 0}  # nothing was redacted
+    assert base64.b64decode(w.next("m1")["data"]) == b"Tell the person the plan."
+    assert engine.remapped == [("s1", "claude.ai")]
+
+
+def test_remap_of_text_that_is_not_utf8_is_refused(wire):
+    w = wire(lambda: StubEngine())
+    w.request("m2", "remap", b"\xff\xfe [PERSON_1]")
+    answer = w.outcome("m2")
+    assert (answer["type"], answer["code"]) == ("error", "bad_input")

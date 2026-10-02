@@ -7,6 +7,8 @@
  * stopped, silent or confused host, or an engine error, ends the request with `blocked`,
  * and nothing unredacted is ever handed back. It logs nothing and stores no content:
  * chrome.storage holds one setting and the chat-scope aliases (URL paths), never input.
+ * Real values behind pseudonyms (redactit/remap) go only to extension pages, never to a
+ * content script, so they never reach a site's page (THREAT_MODEL T6).
  *
  * ## Message API (content scripts and the side panel)
  *
@@ -48,12 +50,18 @@
  *   redactit/redact-text {text, tabId}  -> {ok: true, text} | {ok: false, code, message}.
  *       Extension pages only; for "Redact & copy". At most 8 MiB of UTF-8; use a job port
  *       beyond that. Never held for review: the panel is the reviewer.
- *   redactit/review-list          -> [Review]. Extension pages only.
+ *   redactit/remap {text, tabId}   -> {ok: true, text} | {ok: false, code, message}.
+ *       Extension pages only: `text` (from the AI) with the tab's chat pseudonyms replaced
+ *       by their real values, using the same scope as that tab's redactions. At most 8 MiB.
+ *       The result holds real values: show it in the panel, never write it into a page.
+ *   redactit/review-list           -> [Review]. Extension pages only.
  *   redactit/review-get {job}      -> Review & {text?}: the redacted text part, if any.
  *   redactit/review-decide {job, approve}  -> {ok}. approve=true hands the result to the
  *       page; false blocks it. Extension pages only, so a page cannot approve itself.
  *   redactit/page {adapter, active}     content scripts only: reports the site adapter's
  *       self-check (active: null while checking) and starts the host when keepReady is on.
+ *   An extension-pages-only message from anywhere else gets
+ *   {ok: false, code: 'not_allowed', message}.
  *
  *   Status: {state: 'down'|'starting'|'warming'|'ready-text'|'ready-all'|'unavailable',
  *            version, error: {code, message} | null, jobs, reviews, settings: {keepReady},
@@ -93,7 +101,7 @@ const RECONNECT_MS = [1_000, 2_000, 5_000, 15_000, 60_000];
 const IDLE_EXIT_MS = 25 * 60_000;
 
 // The host's protocol (src/redactit/hosts/native.py). These must match it exactly.
-const PROTOCOL = 2; // 2: results carry a review count, and status the policy's review mode
+const PROTOCOL = 2; // 2: results carry a review count, status the policy's review mode, and remap
 const CHUNK = 512 * 1024; // base64 characters per chunk
 const RAW_CHUNK = (CHUNK / 4) * 3; // the payload bytes they carry (384 KiB)
 const MAX_PAYLOAD = 64 * 1024 * 1024;
@@ -115,6 +123,7 @@ const RESULT_SHAPES = {
   docx: [[['text', 'text/markdown']]],
   pdf: [[['file', 'application/pdf'], ['text', 'text/markdown']]],
   image: [[['file', 'image/png']], [['file', 'image/jpeg']]],
+  remap: [[['text', 'text/plain']]],
 };
 
 /** Allowed sites and where each keeps its chat id (for the pseudonym scope, PLAN §6). */
@@ -135,6 +144,7 @@ const REASONS = {
   host_down: "Redactit's app is not running.",
   host_timeout: "Redactit's app stopped responding.",
   host_incompatible: "Redactit's app and this extension are different versions. Update both to the same release.",
+  not_allowed: "Only Redactit's own panel can do this.",
   protocol: "Redactit's app sent something the extension could not check.",
   warming_timeout: `Redactit's app took more than ${Math.round(WARM_HOLD_MS / 1000)} seconds to start. Try again.`,
   engine_unavailable: "Redactit's redaction engine could not start.",
@@ -483,6 +493,8 @@ function b64Bytes(data) {
   return (data.length / 4) * 3 - pad;
 }
 
+/** A job port's start. 'remap' is not a port kind: it goes only through redactit/remap,
+ * which answers extension pages alone, so real values never travel down a port to a page. */
 function validStart(msg) {
   return msg && msg.op === 'start' && (msg.kind === 'text' || KINDS.includes(msg.kind))
     && isCount(0)(msg.size) && msg.total === chunkCount(msg.size);
@@ -512,9 +524,10 @@ function createJob(client, msg, place, fromPage) {
   post(job, { op: 'accepted', job: job.id });
   startHost();
   if (!host.port) return finish(job, host.error?.code || 'host_down');
-  const header = { type: job.kind === 'text' ? 'redact_text' : 'redact_file', id: job.id, scope: job.scope,
+  const types = { text: 'redact_text', remap: 'remap' };
+  const header = { type: types[job.kind] || 'redact_file', id: job.id, scope: job.scope,
     site: job.site, size: job.size, total: job.total };
-  if (job.kind !== 'text') header.kind = job.kind;
+  if (!types[job.kind]) header.kind = job.kind;
   sendHost(header);
   if (!readyFor(job.kind)) hold(job);
   return job;
@@ -706,7 +719,7 @@ function ensureTicker() {
     const now = Date.now();
     for (const job of [...jobs.values()]) {
       if (job.held || job.review || job.hostDone) continue;
-      const limit = job.kind === 'text' ? SILENCE_MS.text : SILENCE_MS.file;
+      const limit = job.kind === 'text' || job.kind === 'remap' ? SILENCE_MS.text : SILENCE_MS.file;
       if (now - Math.max(job.activeAt, host.lastFrameAt) <= limit) continue;
       if (now - host.lastFrameAt > SILENCE_MS.file) return dropHost('host_timeout'); // hung, not busy
       cancelJob(job, 'host_timeout');
@@ -953,35 +966,44 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       if (settings.keepReady) startHost();
       return { keepReady: settings.keepReady };
     },
-    'redactit/restart-host': page && (async () => {
+  };
+  // Only our own pages: these read or decide reviews, restart the host, or return real values.
+  const panelHandlers = {
+    'redactit/restart-host': async () => {
       dropHost('cancelled');
       startHost();
       return statusOf();
-    }),
-    'redactit/cancel': page && (() => {
+    },
+    'redactit/cancel': () => {
       const job = jobs.get(msg.job);
       if (job) cancelJob(job, 'cancelled');
       return { ok: Boolean(job) };
-    }),
-    'redactit/redact-text': page && (() => redactForPanel(msg)),
-    'redactit/review-list': page && (() => reviewList()),
-    'redactit/review-get': page && (() => {
+    },
+    'redactit/redact-text': () => textForPanel('text', msg),
+    'redactit/remap': () => textForPanel('remap', msg),
+    'redactit/review-list': () => reviewList(),
+    'redactit/review-get': () => {
       const job = jobs.get(msg.job);
       return job && job.review ? { ...reviewOf(job), text: reviewText(job) } : null;
-    }),
-    'redactit/review-decide': page && (() => ({ ok: decideReview(msg.job, msg.approve === true) })),
+    },
+    'redactit/review-decide': () => ({ ok: decideReview(msg.job, msg.approve === true) }),
   };
-  const handler = handlers[type];
+  let handler = handlers[type] || panelHandlers[type];
   if (!handler) return false;
+  if (panelHandlers[type] && !page) handler = () => ({ ok: false, code: 'not_allowed', message: reasonFor('not_allowed') });
   Promise.resolve()
     .then(handler)
     .then(reply, () => reply({ ok: false, code: 'extension_error', message: reasonFor('extension_error') }));
   return true; // the reply may come later
 });
 
-/** "Redact & copy" from the side panel: the same job path, with an in-memory client. */
-async function redactForPanel(msg) {
-  const kind = 'text';
+/**
+ * Text in, text out, for the side panel: "Redact & copy" (kind 'text') or re-mapping a
+ * reply (kind 'remap'). The same job path as a page's, with an in-memory client, so the
+ * result never travels down a port; for 'remap' it holds real values and goes only to
+ * the extension page that asked.
+ */
+async function textForPanel(kind, msg) {
   const fail = (code) => ({ ok: false, code, message: reasonFor(code) });
   if (typeof msg.text !== 'string') return fail('extension_error');
   const bytes = new TextEncoder().encode(msg.text);

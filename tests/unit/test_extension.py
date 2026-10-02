@@ -104,6 +104,21 @@ def test_the_worker_speaks_the_hosts_protocol():
     assert set(native.REVIEW_MODES.values()) <= set(re.findall(r"'(\w+)'", modes))
 
 
+def test_real_values_have_no_path_to_a_content_script():
+    """T6: re-mapping and review contents are answered to extension pages only, and no
+    content script asks for them."""
+    bg = (EXT / "background.js").read_text(encoding="utf-8")
+    panel_only = re.search(r"const panelHandlers = \{(.*?)\n  \};", bg, re.S).group(1)
+    for message in ("redactit/remap", "redactit/review-get", "redactit/review-decide"):
+        assert f"'{message}'" in panel_only
+        assert bg.count(f"'{message}'") == 1  # handled nowhere else
+    assert "if (panelHandlers[type] && !page)" in bg
+    assert "msg.kind === 'text' || KINDS.includes(msg.kind)" in bg  # a job port cannot start a remap
+    for path in (EXT / "content").rglob("*.js"):
+        code = _code(path)
+        assert "redactit/remap" not in code and "redactit/review-" not in code, path.name
+
+
 def test_the_main_world_guard_locks_what_it_replaces():
     guard = _code(EXT / "content" / "guard.js")
     assert "writable: false, enumerable: true, configurable: false" in guard

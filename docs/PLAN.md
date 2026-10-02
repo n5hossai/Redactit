@@ -295,7 +295,11 @@ are committed.
   the site assigns an ID. Vault entries purge after 30 days.
 - **Re-mapping** of pseudonyms back to real names happens only inside the side panel,
   which is an extension page. Real names are never written into the AI site's DOM, where
-  the site's scripts could read them.
+  the site's scripts could read them. The panel sends the AI's reply through the service
+  worker (`redactit/remap`, extension pages only) to the host (`remap`, protocol 2), which
+  replaces each of that chat scope's labels with its value from the vault and leaves any
+  other `[TYPE_N]` alone. The worker uses the same scope as the tab's redactions. The audit
+  log records counts per type, never values.
 
 ## 7. Extension
 
