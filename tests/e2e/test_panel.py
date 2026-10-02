@@ -171,8 +171,8 @@ def test_a_dropped_file_shows_real_progress_then_the_redacted_copy(setup, tmp_pa
 
 
 def test_getting_the_copy_out_by_attach_and_by_drag(setup, tmp_path):
-    """Attach needs a worker message that does not exist yet, so the panel must say so and
-    send nothing. Dragging was tested as an experiment: Chromium does not hand a File made
+    """Attach puts the worker's checked copy into the chat, once; a second try is told the
+    copy has gone. Dragging was tested as an experiment: Chromium does not hand a File made
     in one page to another; a File added in dragstart arrives at a page's drop target only
     as its name, in text/plain (crbug.com/394955). If that changes, this test fails and
     the panel's drag can carry the file itself. Until then the drag carries DownloadURL
@@ -225,18 +225,26 @@ def test_getting_the_copy_out_by_attach_and_by_drag(setup, tmp_path):
         assert not carried.get("files")
     deliver_drag(b.context, chat, "#dropzone", carried)  # what a drop on the chat would get
 
-    # Attach: refused by today's worker, so the panel says so and the chat gets nothing.
+    # Attach: the worker hands the chat the copy it checked, under a neutral name.
     panel.bring_to_front()
     panel.click("#attachBtn")
-    wait_for(lambda: "isn't available" in panel.inner_text("#resultNote"))
+    wait_for(lambda: "Attached to the chat" in panel.inner_text("#resultNote"))
+    wait_for(lambda: chat.evaluate("window.__attachments.length") == 1)
+    assert chat.evaluate("(f => [f.name, f.type])(window.__attachments[0])") == ["redacted-1.png", "image/png"]
+    assert base64.b64decode(chat.evaluate("window.__read(0)")) == STUB_OUT["png"]
     panel.focus("#dragOut")
-    panel.keyboard.press("Enter")  # the left folder attaches from the keyboard too
-    assert "isn't available" in panel.inner_text("#resultNote")
-    assert chat.evaluate("window.__attachments.length") == 0
+    panel.keyboard.press("Enter")  # the left folder attaches from the keyboard too; the copy has gone
+    wait_for(lambda: "no longer available" in panel.inner_text("#resultNote"))
+    assert chat.evaluate("window.__attachments.length") == 1
     seen = chat.evaluate("window.__seen")
-    assert not [e for e in seen if e["type"] in ("paste", "change")]
+    assert not [e for e in seen if e["type"] == "paste"]
+    assert all(not e["trusted"] for e in seen if e["type"] == "change")  # only the attach's own event
     # The DownloadURL drag dropped on the chat arrives empty: no text, no markup, no file.
-    assert all(e["text"] == e["html"] == "" and e["files"] == [] for e in seen if e["type"] == "drop")
+    # The attach's own drop on the composer carries the redacted copy and nothing else.
+    for e in (e for e in seen if e["type"] == "drop"):
+        assert e["text"] == e["html"] == ""
+        assert e["files"] == ([] if e["trusted"] else [{"name": "redacted-1.png", "size": len(STUB_OUT["png"]),
+                                                       "type": "image/png"}])
     assert_no_raw(page_view(chat))
 
 
