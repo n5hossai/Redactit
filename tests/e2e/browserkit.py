@@ -177,6 +177,8 @@ def _route(route) -> None:
     """Every request the browser makes is answered here; nothing reaches the network."""
     url = route.request.url
     path = url.split("?", 1)[0]
+    if url.startswith(ORIGIN):  # the extension's own files (the side panel's script and style)
+        return route.continue_()
     if path.endswith("/__standin/recorder.js"):
         return route.fulfill(status=200, content_type="text/javascript", body=(SITE / "recorder.js").read_text("utf-8"))
     if url.startswith("https://claude.ai/"):
@@ -240,9 +242,30 @@ class Browser:
             cdp.send("Input.dispatchDragEvent", {"type": kind, "x": x, "y": y, "data": data})
         cdp.detach()
 
+    def clipboard(self) -> str:
+        """What a paste would insert now: pasted into the helper page's text box."""
+        if self._helper is None:
+            self._helper = self.open(HELPER)
+        self._helper.bring_to_front()
+        self._helper.fill("#src", "")
+        self._helper.focus("#src")
+        self._helper.keyboard.press("Control+V")
+        return self._helper.input_value("#src")
+
     def panel(self):
-        """The side panel's page, open in a tab: an extension page, as the panel is."""
+        """The side panel's page, open in a tab: an extension page, as the panel is. Opened
+        in a tab, it works for the chat tab used most recently (common.js findTarget)."""
         return self.open(f"{ORIGIN}sidepanel/panel.html")
+
+    def stub_host(self, mode: str, **options) -> None:
+        """Puts the scripted host in stubhost.js behind the worker's connectNative: the
+        worker's own code runs in full, on every OS, with no host registered."""
+        script = (Path(__file__).parent / "stubhost.js").read_text(encoding="utf-8")
+        assert self.worker.evaluate(f"({script})({json.dumps(mode)}, {json.dumps(options)})") is True
+
+    def stub_frames(self) -> list[dict]:
+        """The type and id of every frame the worker sent the scripted host."""
+        return self.worker.evaluate("self.__stubFrames || []")
 
     @staticmethod
     def api(page, message: dict):
