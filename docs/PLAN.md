@@ -295,7 +295,11 @@ are committed.
   the site assigns an ID. Vault entries purge after 30 days.
 - **Re-mapping** of pseudonyms back to real names happens only inside the side panel,
   which is an extension page. Real names are never written into the AI site's DOM, where
-  the site's scripts could read them.
+  the site's scripts could read them. The panel sends the AI's reply through the service
+  worker (`redactit/remap`, extension pages only) to the host (`remap`, protocol 2), which
+  replaces each of that chat scope's labels with its value from the vault and leaves any
+  other `[TYPE_N]` alone. The worker uses the same scope as the tab's redactions. The audit
+  log records counts per type, never values.
 
 ## 7. Extension
 
@@ -365,12 +369,22 @@ are committed.
 - Review UX: `chrome.sidePanel.open()` only works synchronously inside a user gesture in
   extension code (Chrome 116+). When a paste needs review, the send is held and an
   in-page notice asks the user to click the Redactit toolbar button, which opens the panel
-  with the pending review. For now review is an extension setting (`reviewMode`:
-  `always` or `off`); the host's results do not yet say when a span was low-confidence
-  (§12). Only extension pages can read or decide a review, so a site cannot approve its
-  own paste; a review not decided in 10 minutes blocks.
+  with the pending review. The review mode is the policy's (`review.mode`), which the
+  host reports in its status (protocol 2: `always` or `low_confidence`); it is not an
+  extension setting, so a user cannot switch off a review the admin asked for. Every
+  result carries `review: {needed, count}`, the number of the engine's decisions marked
+  for review, counts only. A page's result is held when the mode is `always`, or
+  `low_confidence` with `needed`; never when it is `off`; and, until the host has said,
+  as if `always`. Only extension pages can read or decide a review, so a site cannot
+  approve its own paste; a review not decided in 10 minutes blocks. The worker refuses a
+  host on another protocol version (`host_incompatible`).
 - In-page notices live in a closed shadow root: the site can tell that one exists, but
   cannot read it. They show status and reasons only, never content.
+- Main-world guard (`content/guard.js`): the one script that runs in the page's own world,
+  at `document_start` on the three sites, before their scripts. It makes the site's own
+  clipboard reads and file pickers reject with `NotAllowedError`, locked against being
+  reassigned or deleted, so a site uses paste and the file input, which are intercepted.
+  What a determined page can still do is in THREAT_MODEL §5.
 - Adapters (`content/adapters/claude.js`, `chatgpt.js`, `gemini.js`): one file per site,
   isolated, naming only the composer and the file input. Each adapter self-checks its
   selectors for 15 s after load and disables itself (fallback only) if they are missing;

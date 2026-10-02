@@ -9,7 +9,7 @@ from redactit.audit import AuditLog
 from redactit.detect.ner import GlinerNer
 from redactit.detect.registry import Detector
 from redactit.policy import Policy
-from redactit.pseudonym import Pseudonymizer, replacements, splice
+from redactit.pseudonym import Pseudonymizer, remap, replacements, splice
 from redactit.types import Decision, Span
 from redactit.vault import Vault
 
@@ -103,6 +103,18 @@ class Engine:
                 decisions=[_audit_entry(d) for d in decisions],
             )
         return result
+
+    def remap(self, text: str, scope: str, *, site: str | None = None) -> str:
+        """`text` with `scope`'s pseudonyms turned back into their real values (PLAN §6).
+
+        Only for the side panel, an extension page: the result holds real values, so it
+        must never be written into an AI site's page (THREAT_MODEL T6). Audited as counts.
+        """
+        out, seen, restored = remap(text, self.vault, scope)
+        if self.audit:
+            self.audit.write("remap", site=site or "cli", label_count=seen,
+                             restored_count=sum(restored.values()), entity_counts=dict(restored))
+        return out
 
 
 def _canonical(text: str) -> tuple[str, list[int]]:

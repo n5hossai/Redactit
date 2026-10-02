@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from redactit.pseudonym import Pseudonymizer, replacements, splice
+from redactit.pseudonym import Pseudonymizer, remap, replacements, splice
 from redactit.types import Decision, Span
 from redactit.vault import Vault
 
@@ -89,3 +89,16 @@ def test_pseudonyms_number_in_reading_order(tmp_path):
           Decision(Span(8, 11, "PERSON", 0.9, "t"), "pseudonymize", "entities.PERSON", "r")]
     with Vault(tmp_path / "v.db", b"\x02" * 32) as v:
         assert apply(text, ds, Pseudonymizer(v, "s")) == "[PERSON_1] met [PERSON_2]."
+
+
+def test_remap_restores_only_this_scopes_labels(tmp_path):
+    vault = _vault(tmp_path)
+    pz = Pseudonymizer(vault, scope="chat-1")
+    assert pz.label("PERSON", "Priya Okafor") == "[PERSON_1]"
+    assert pz.label("CREDIT_CARD", "4111 1111 1111 1111") == "[CREDIT_CARD_1]"
+    Pseudonymizer(vault, scope="chat-2").label("PERSON", "Jordan Page")
+    reply = "Ask [PERSON_1] about [CREDIT_CARD_1]; not [PERSON_2], [person_1] or [PERSON_01]."
+    text, seen, restored = remap(reply, vault, "chat-1")
+    assert text == "Ask Priya Okafor about 4111 1111 1111 1111; not [PERSON_2], [person_1] or [PERSON_01]."
+    assert (seen, dict(restored)) == (3, {"PERSON": 1, "CREDIT_CARD": 1})  # [PERSON_2] seen, not this chat's
+    assert remap(reply, vault, "chat-2")[0].startswith("Ask Jordan Page about [CREDIT_CARD_1]")

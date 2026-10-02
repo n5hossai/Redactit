@@ -49,6 +49,7 @@ def rejected(raw: bytes) -> Reject:
     {"type": "cancel", "id": "r1"},
     header(),
     {**header(), "type": "redact_file", "kind": "pdf"},
+    {**header(), "type": "remap"},
     chunk(0, b"abc", 1),
 ])
 def test_every_message_type_parses(msg):
@@ -181,9 +182,13 @@ def test_frames_to_the_extension_stay_under_chromes_limit():
 class StubEngine:
     """Stands in for pipeline.Engine; each stage can be made to fail."""
 
-    def __init__(self, *, text_fails=None, images_fail=None, redact_raises=None):
+    def __init__(self, *, text_fails=None, images_fail=None, redact_raises=None, review_mode="low_confidence_only",
+                 flags=(False,)):
         self.text_fails, self.images_fail, self.redact_raises = text_fails, images_fail, redact_raises
+        self.policy = SimpleNamespace(review=SimpleNamespace(mode=review_mode))
+        self.flags = flags  # needs_review of each decision a redact call returns
         self.sites = []
+        self.remapped = []
 
     def warm_text(self):
         if self.text_fails:
@@ -197,7 +202,12 @@ class StubEngine:
         self.sites.append(site)
         if self.redact_raises:
             raise self.redact_raises
-        return SimpleNamespace(text=text.replace(SECRET, "[PERSON_1]"), decisions=[])
+        return SimpleNamespace(text=text.replace(SECRET, "[PERSON_1]"),
+                               decisions=[SimpleNamespace(needs_review=f) for f in self.flags])
+
+    def remap(self, text, scope, *, site=None):
+        self.remapped.append((scope, site))
+        return text.replace("[PERSON_1]", "the person")  # a stand-in value: SECRET must not cross the wire
 
 
 class Wire:
@@ -223,9 +233,10 @@ class Wire:
         native._write_all(self._sender, native._frame(msg))
 
     def request(self, rid, kind, payload: bytes, site="claude.ai"):
-        header = {"type": "redact_text" if kind == "text" else "redact_file", "id": rid, "scope": "s1",
+        types = {"text": "redact_text", "remap": "remap"}
+        header = {"type": types.get(kind, "redact_file"), "id": rid, "scope": "s1",
                   "site": site, "size": len(payload), "total": 1}
-        if kind != "text":
+        if kind not in types:
             header["kind"] = kind
         self.send(header)
         self.send(chunk(0, payload, 1, rid))
@@ -335,3 +346,60 @@ def test_a_detection_timeout_is_its_own_error_and_returns_nothing(wire):
     w.send({"type": "ping", "id": "p1"})
     w.next("p1")  # answered after the request, so nothing more is coming for it
     assert not [m for m in w.received if m.get("id") == "t1" and m["type"] in ("result", "chunk")]
+
+
+# --- Protocol 2: review signal and re-mapping ----------------------------------------------
+
+@pytest.mark.parametrize(("policy_mode", "announced"), [("always", "always"),
+                                                        ("low_confidence_only", "low_confidence")])
+def test_status_carries_the_policys_review_mode_once_the_engine_loads(wire, policy_mode, announced):
+    w = wire(lambda: StubEngine(review_mode=policy_mode))
+    statuses = [w.next(None) for _ in range(3)]
+    assert [(s["state"], s["review_mode"]) for s in statuses] == [
+        ("warming", None), ("ready-text", announced), ("ready-all", announced)]
+    assert all(s["protocol"] == 2 for s in statuses)
+    w.send({"type": "ping", "id": "p1"})
+    assert w.next("p1")["review_mode"] == announced
+
+
+@pytest.mark.parametrize(("flags", "review"), [
+    ((), {"needed": False, "count": 0}),
+    ((False, False), {"needed": False, "count": 0}),
+    ((True, False, True), {"needed": True, "count": 2}),
+])
+def test_a_result_counts_the_decisions_that_need_review(wire, flags, review):
+    w = wire(lambda: StubEngine(flags=flags))
+    w.request("t1", "text", PAYLOADS["text"])
+    assert w.outcome("t1")["review"] == review
+
+
+def test_a_files_review_count_covers_every_engine_call_the_format_makes(wire, monkeypatch):
+    from redactit.formats import pdf
+
+    def two_pages(data, engine, scope, *, site, **kw):
+        for page in ("page one", "page two"):
+            engine.redact(page, scope, site=site)  # as redact_pdf does per page and per image
+        return b"%PDF", "## Page 1\n"
+
+    monkeypatch.setattr(pdf, "redact_pdf", two_pages)
+    w = wire(lambda: StubEngine(flags=(True, False)))
+    w.request("f1", "pdf", PAYLOADS["pdf"])
+    assert w.outcome("f1")["review"] == {"needed": True, "count": 2}
+
+
+def test_remap_returns_the_scopes_real_values_as_one_text_part(wire):
+    engine = StubEngine(flags=(True,))
+    w = wire(lambda: engine)
+    w.request("m1", "remap", b"Tell [PERSON_1] the plan.", site="claude.ai")
+    result = w.outcome("m1")
+    assert result["parts"] == [{"name": "text", "media_type": "text/plain", "size": len("Tell the person the plan.")}]
+    assert result["review"] == {"needed": False, "count": 0}  # nothing was redacted
+    assert base64.b64decode(w.next("m1")["data"]) == b"Tell the person the plan."
+    assert engine.remapped == [("s1", "claude.ai")]
+
+
+def test_remap_of_text_that_is_not_utf8_is_refused(wire):
+    w = wire(lambda: StubEngine())
+    w.request("m2", "remap", b"\xff\xfe [PERSON_1]")
+    answer = w.outcome("m2")
+    assert (answer["type"], answer["code"]) == ("error", "bad_input")

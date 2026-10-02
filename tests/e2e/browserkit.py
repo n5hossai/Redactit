@@ -289,6 +289,49 @@ class Setup:
                 self.registration.close()
 
 
+# What the page's own scripts get from the calls extension/content/guard.js replaces, and
+# from trying to undo it. "+" marks Redactit's own refusal, not the browser's.
+GUARD_PROBE = """async () => {
+    const outcome = (call) => call().then(() => 'allowed', (e) => e.name + (/Redactit/.test(e.message) ? '+' : ''));
+    const result = {
+        readText: await outcome(() => navigator.clipboard.readText()),
+        read: await outcome(() => navigator.clipboard.read()),
+        picker: await outcome(() => window.showOpenFilePicker()),
+        directory: await outcome(() => window.showDirectoryPicker()),
+        deleted: delete Clipboard.prototype.readText,
+    };
+    try { Object.defineProperty(Clipboard.prototype, 'readText', {value: () => 'mine'}); result.redefined = true; }
+    catch (e) { result.redefined = e.name; }
+    window.showOpenFilePicker = () => 'mine';
+    result.assigned = window.showOpenFilePicker.name;
+    result.after = await outcome(() => navigator.clipboard.readText());
+    return result;
+}"""
+GUARD_REFUSED = {"readText": "NotAllowedError+", "read": "NotAllowedError+", "picker": "NotAllowedError+",
+                 "directory": "NotAllowedError+", "deleted": False, "redefined": "TypeError",
+                 "assigned": "showOpenFilePicker", "after": "NotAllowedError+"}
+
+
+def content_script_eval(context, page, expression: str, timeout: float = 30):
+    """Runs `expression` in Redactit's content-script world of `page`'s main frame, through
+    DevTools, and returns its (awaited) value: what a content script, or a page that took
+    one over, could get from the service worker."""
+    cdp = context.new_cdp_session(page)
+    contexts: list[dict] = []
+    cdp.on("Runtime.executionContextCreated", lambda event: contexts.append(event["context"]))
+    try:
+        cdp.send("Runtime.enable")  # reports the frame's existing worlds as events
+        world = wait_for(lambda: next((c for c in contexts if c.get("origin", "").startswith(ORIGIN.rstrip("/"))
+                                       and c.get("auxData", {}).get("type") == "isolated"
+                                       and c.get("auxData", {}).get("isDefault") is False), None), timeout=timeout)
+        out = cdp.send("Runtime.evaluate", {"expression": expression, "contextId": world["id"],
+                                            "awaitPromise": True, "returnByValue": True})
+    finally:
+        cdp.detach()
+    assert "exceptionDetails" not in out, out.get("exceptionDetails")
+    return out["result"].get("value")
+
+
 def notice_text(context, page) -> str:
     """The text of Redactit's in-page notice, read through DevTools, which can see into a
     closed shadow root; the page itself cannot."""

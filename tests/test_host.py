@@ -128,6 +128,26 @@ def test_warming_then_ready_and_an_early_request_waits(host, engine):
 def test_ping_reports_the_state_and_protocol(host):
     status = host.ping("p1")
     assert (status["type"], status["state"], status["protocol"]) == ("status", "ready-all", native.PROTOCOL)
+    assert status["review_mode"] == native.REVIEW_MODES[effective_policy().review.mode]
+
+
+def test_a_result_reports_how_many_decisions_need_review(host, engine):
+    host.request("rv", "text", PASTE.encode("utf-8"), scope="review")
+    expected = sum(d.needs_review for d in engine.redact(PASTE, "review").decisions)
+    assert host.outcome("rv")["result"]["review"] == {"needed": expected > 0, "count": expected}
+
+
+def test_remap_turns_a_scopes_pseudonyms_back_into_real_values(host):
+    host.request("rm1", "text", PASTE.encode("utf-8"), scope="remap")
+    redacted = host.outcome("rm1")["parts"]["text"].decode("utf-8")
+    labels = re.findall(r"\[[A-Z_]+_\d+\]", redacted)
+    assert "[PERSON_1]" in labels and "[EMAIL_1]" in labels
+    reply = "Write to [PERSON_1] at [EMAIL_1]; [PERSON_9] is unknown."
+    host.request("rm2", "remap", reply.encode("utf-8"), scope="remap")
+    out = host.outcome("rm2")
+    assert out["parts"]["text"].decode("utf-8") == f"Write to {NAME} at {EMAIL}; [PERSON_9] is unknown."
+    host.request("rm3", "remap", reply.encode("utf-8"), scope="another-chat")
+    assert host.outcome("rm3")["parts"]["text"].decode("utf-8") == reply  # another chat's labels mean nothing here
 
 
 # --- round trips ------------------------------------------------------------------------
@@ -276,6 +296,9 @@ def test_nothing_sent_leaks_into_errors_stderr_or_the_audit_log(host):
     for where, text in {"errors": errors, "stderr": stderr, "audit": audit}.items():
         assert not [s for s in SECRETS if s in text], where
     assert "redaction" in audit and "model_verified" in audit
+    remaps = [json.loads(line) for line in audit.splitlines() if '"remap"' in line]
+    assert {(r["label_count"], r["restored_count"], json.dumps(r["entity_counts"], sort_keys=True)) for r in remaps} == {
+        (3, 2, '{"EMAIL": 1, "PERSON": 1}'), (3, 0, "{}")}  # counts only, as the audit log allows
 
 
 # --- hosts of their own -----------------------------------------------------------------
