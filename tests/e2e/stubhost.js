@@ -9,16 +9,19 @@
 // The real host is still covered by test_round_trip.py and by test_panel.py's real-host test.
 //
 // Modes:
-//   redact  says `warming` for options.warmMs, then `ready-text` and `ready-all`; answers
-//           each request with `queued`, `redacting`, PDF pages 1..options.pages (one every
-//           options.pageMs), then a fixed result: text with options.replace applied, and
-//           options.files[kind] (base64) for a PDF's file part or an image.
+//   redact  says `warming` for options.warmMs, then `ready-text` and `ready-all`, with the
+//           policy's options.reviewMode; answers each request with `queued`, `redacting`,
+//           PDF pages 1..options.pages (one every options.pageMs), then a fixed result:
+//           text with options.replace applied, options.files[kind] (base64) for a PDF's
+//           file part or an image, and options.reviewCount decisions marked for review.
+//           A remap request gets its text with options.replace undone.
 //   hang    ready at once; takes requests, reports `queued` and `redacting`, never answers.
 //
 // Every frame from the worker is logged in self.__stubFrames as {type, id}, never its data.
 (mode, options) => {
   const RAW_CHUNK = 384 * 1024;
-  const opts = { warmMs: 0, pages: 2, pageMs: 200, replace: {}, files: {}, markdown: '# Page 1\n', ...options };
+  const opts = { warmMs: 0, pages: 2, pageMs: 200, replace: {}, files: {}, markdown: '# Page 1\n',
+    reviewMode: 'off', reviewCount: 0, ...options };
   const frames = (self.__stubFrames = []);
 
   const fromB64 = (data) => Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
@@ -42,7 +45,8 @@
         for (const fn of listeners.message) fn(msg);
       });
     };
-    const status = (state, id = null) => ({ type: 'status', id, state, version: '0.1.0', protocol: 1 });
+    const status = (state, id = null) => ({ type: 'status', id, state, version: '0.1.0', protocol: 2,
+      review_mode: state === 'warming' ? null : opts.reviewMode });
 
     function answer(rid) {
       const req = requests.get(rid);
@@ -62,8 +66,10 @@
       } else {
         const input = new Uint8Array(req.chunks.flatMap((c) => [...fromB64(c)]));
         let text = new TextDecoder().decode(input);
-        for (const [raw, token] of Object.entries(opts.replace)) text = text.split(raw).join(token);
-        const media = req.kind === 'text' || req.kind === 'txt' ? 'text/plain' : 'text/markdown';
+        for (const [raw, token] of Object.entries(opts.replace)) {
+          text = req.kind === 'remap' ? text.split(token).join(raw) : text.split(raw).join(token);
+        }
+        const media = ['text', 'txt', 'remap'].includes(req.kind) ? 'text/plain' : 'text/markdown';
         parts = [['text', media, utf8(text)]];
       }
       const bytes = new Uint8Array(parts.reduce((n, p) => n + p[2].length, 0));
@@ -74,7 +80,8 @@
       }
       const total = Math.max(1, Math.ceil(bytes.length / RAW_CHUNK));
       send({ type: 'result', id: rid, size: bytes.length, total,
-        parts: parts.map(([name, media_type, b]) => ({ name, media_type, size: b.length })) }, opts.pageMs, rid);
+        parts: parts.map(([name, media_type, b]) => ({ name, media_type, size: b.length })),
+        review: { needed: opts.reviewCount > 0, count: opts.reviewCount } }, opts.pageMs, rid);
       for (let seq = 0; seq < total; seq += 1) {
         send({ type: 'chunk', id: rid, seq, total, data: toB64(bytes.subarray(seq * RAW_CHUNK, (seq + 1) * RAW_CHUNK)) },
           0, rid);
@@ -87,8 +94,9 @@
       onDisconnect: { addListener: (fn) => listeners.disconnect.push(fn) },
       postMessage(msg) {
         frames.push({ type: msg.type, id: msg.id ?? null });
-        if (msg.type === 'redact_text' || msg.type === 'redact_file') {
-          requests.set(msg.id, { kind: msg.kind || 'text', total: msg.total, chunks: [], cancelled: false });
+        if (['redact_text', 'redact_file', 'remap'].includes(msg.type)) {
+          const kind = msg.kind || (msg.type === 'remap' ? 'remap' : 'text');
+          requests.set(msg.id, { kind, total: msg.total, chunks: [], cancelled: false });
         } else if (msg.type === 'chunk') {
           const req = requests.get(msg.id);
           req.chunks.push(msg.data);

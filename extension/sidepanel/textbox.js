@@ -8,7 +8,7 @@
  * memory, until the user clears it or closes the panel.
  */
 import { $, announce, ask, copyText, findTarget, setNote } from './common.js';
-import { LOCAL_REASONS, reviewOf } from './job.js';
+import { LOCAL_REASONS } from './job.js';
 
 /** The worker's limit for this message; larger text goes through a file drop instead. */
 const MAX_TEXT = 8 * 1024 * 1024;
@@ -54,10 +54,8 @@ export function initTextbox() {
     }
     out.value = reply.text;
     out.hidden = $('textOutLabel').hidden = $('textCopyRow').hidden = false;
-    const review = reviewOf(reply.review);
-    const unsure = review ? ' Redactit was unsure about part of it: check it before you send it.' : '';
-    if (await copyOut()) return say(`Redacted and copied. Paste it into the chat.${unsure}`, review ? 'warn' : 'good');
-    return say(`Redacted, but copying was blocked: the text below is selected, press Ctrl+C.${unsure}`, 'warn');
+    if (await copyOut()) return say('Redacted and copied. Paste it into the chat.', 'good');
+    return say('Redacted, but copying was blocked: the text below is selected, press Ctrl+C.', 'warn');
   });
 
   $('textCopyBtn').addEventListener('click', async () => {

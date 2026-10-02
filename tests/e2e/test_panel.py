@@ -261,31 +261,34 @@ def test_status_follows_the_host_and_the_settings(setup):
     b = s.browser
     assert wait_for(lambda: panel.inner_text("#hostPill") == "Starts when needed")
     assert panel.inner_text("#target") == "Working for claude.ai, the chat in view."
+    panel.click("#settingsSection summary")
+    assert panel.inner_text("#reviewModeValue") == "Not known yet"  # no policy until the host loads one
 
-    stub(s, warmMs=800)
+    stub(s, warmMs=800, reviewMode="low_confidence")
     b.api(panel, {"type": "redactit/start-host"})
     wait_for(lambda: panel.inner_text("#hostPill") == "Ready")
     assert "Warming up" in panel.evaluate("window.__pills")
     assert panel.get_attribute("#hostPill", "role") == "status"
+    assert panel.inner_text("#reviewModeValue") == "When Redactit is unsure"
+    assert "unsure about wait here" in panel.inner_text("#reviewModeLine")
+    # The review mode is the admin's policy: shown, with nothing in the panel to change it.
+    assert panel.locator("#settingsSection input").evaluate_all("els => els.map(e => e.id)") == ["keepReady"]
 
-    panel.click("#settingsSection summary")
     panel.check("#keepReady")
     assert wait_for(lambda: b.evaluate("chrome.storage.local.get('keepReady')")).get("keepReady") is True
-    assert panel.inner_text("#reviewModeValue") == "Off"
-    b.evaluate("chrome.storage.local.set({reviewMode: 'always'})")
-    wait_for(lambda: panel.inner_text("#reviewModeValue") == "Every paste and file")
-    assert "waits here for your review" in panel.inner_text("#reviewModeLine")
-    assert panel.locator("#reviewModeValue").evaluate("e => !e.closest('label') && !e.querySelector('input')")
 
     chat.close()
     wait_for(lambda: "Open claude.ai" in panel.inner_text("#target"))
 
 
-def test_a_held_paste_is_approved_or_cancelled_in_the_review_queue(setup):
+@pytest.mark.parametrize(("mode", "marked", "reason"), [
+    ("always", 0, "Held because review is on for every paste and file."),
+    ("low_confidence", 2, "Held because Redactit was unsure about part of it."),
+])
+def test_a_held_paste_is_approved_or_cancelled_in_the_review_queue(setup, mode, marked, reason):
     s = setup()
-    stub(s)
+    stub(s, reviewMode=mode, reviewCount=marked)  # the host's policy, and its decisions marked for review
     b = s.browser
-    b.evaluate("chrome.storage.local.set({reviewMode: 'always'})")
     chat, panel = open_panel(s)
     editor = chat.locator(".ProseMirror")
     item = panel.locator("#reviewList .review")
@@ -295,7 +298,7 @@ def test_a_held_paste_is_approved_or_cancelled_in_the_review_queue(setup):
         wait_for(lambda: item.count() == 1)
         assert panel.inner_text("#reviewCount") == "1"
         assert item.locator(".review-what").inner_text() == "Paste on claude.ai"
-        assert item.locator(".review-reason").inner_text() == "Held because review is on for every paste and file."
+        assert item.locator(".review-reason").inner_text() == reason
         assert wait_for(lambda: item.locator(".review-text").input_value()) == REDACTED
         assert editor.inner_text() == ""  # nothing reaches the page until the review ends
         panel.bring_to_front()
@@ -311,7 +314,7 @@ def test_a_held_paste_is_approved_or_cancelled_in_the_review_queue(setup):
 
 
 def test_remapping_is_not_available_when_refused_and_real_values_stay_in_the_panel(setup):
-    s = setup()  # no host: today's worker has no remap message and refuses it
+    s = setup()  # no host at first: the worker refuses the remap with its reason
     b = s.browser
     chat, panel = open_panel(s)
     reply = "Thanks. I will write to [PERSON_1] at [EMAIL_1] today."
@@ -319,27 +322,19 @@ def test_remapping_is_not_available_when_refused_and_real_values_stay_in_the_pan
     panel.fill("#remapIn", reply)
     panel.click("#remapBtn")
     wait_for(lambda: "not available" in panel.inner_text("#remapStatus"))
+    assert "not installed" in panel.inner_text("#remapStatus")
     assert panel.is_hidden("#remapResult")
 
-    # A worker that answers, as the remap message will: the panel names the chat's tab,
-    # shows the real values, and copies them only on an explicit click.
-    b.evaluate("""(() => {
-      self.__remapAsks = [];
-      chrome.runtime.onMessage.addListener((m, sender, respond) => {
-        if (!m || m.type !== 'redactit/remap') return false;
-        self.__remapAsks.push({tabId: m.tabId});
-        respond({text: m.text.split('[PERSON_1]').join('%s').split('[EMAIL_1]').join('%s')});
-        return false;
-      });
-      return true;
-    })()""" % (NAME, EMAIL))
+    # With a host, the worker re-maps for the chat in view: the panel shows the real
+    # values, and copies them only on an explicit click.
+    stub(s)
     b.copy("nothing copied yet")
     panel.bring_to_front()
     panel.click("#remapBtn")
     wait_for(lambda: panel.is_visible("#remapResult"))
     assert panel.inner_text("#remapOut") == f"Thanks. I will write to {NAME} at {EMAIL} today."
-    chat_tab = b.evaluate("chrome.tabs.query({url: 'https://claude.ai/*'}).then(([t]) => t.id)")
-    assert b.evaluate("self.__remapAsks") == [{"tabId": chat_tab}]
+    assert [f["type"] for f in b.stub_frames()][:1] == ["remap"]
+    assert b.recent()[0] == {"kind": "remap", "site": "claude.ai", "held": True, "code": "delivered"}
     assert "contains real data" in panel.inner_text("#remapWarn")
     assert b.clipboard() == "nothing copied yet"  # shown, not copied
     panel.bring_to_front()

@@ -42,9 +42,10 @@ export function initRemap() {
     clearOut();
     const reply = await ask({ type: 'redactit/remap', text, tabId: target.id });
     btn.removeAttribute('aria-busy');
-    if (!reply || reply.ok === false || typeof reply.text !== 'string') {
-      const why = reply && typeof reply.message === 'string' ? ` ${reply.message}` : '';
-      return say(`Re-mapping is not available in this version of Redactit.${why}`, 'warn');
+    if (!reply) return say('Re-mapping is not available in this version of Redactit.', 'warn');
+    if (reply.ok !== true || typeof reply.text !== 'string') {
+      const why = typeof reply.message === 'string' ? ` ${reply.message}` : '';
+      return say(`Re-mapping is not available right now.${why}`, 'warn');
     }
     out.textContent = reply.text;
     mappedFor = target.id;

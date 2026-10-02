@@ -38,10 +38,6 @@ export function initResult() {
     link.setAttribute('aria-label', `Download ${r.name}`);
     $('copyResultBtn').hidden = r.text === null;
     $('copyResultLabel').textContent = r.blob.type.startsWith('text/') ? 'Copy text' : 'Copy page text';
-    if (r.review?.needed) {
-      const what = r.review.count === 1 ? 'one item' : r.review.count ? `${r.review.count} items` : 'some items';
-      setNote($('reviewNote'), `Redactit was unsure about ${what}. Check the copy before you send it.`, 'warn');
-    }
     box.hidden = false;
   }
 
@@ -53,7 +49,6 @@ export function initResult() {
     link.removeAttribute('href');
     box.hidden = true;
     note.hidden = true;
-    $('reviewNote').hidden = true;
   }
 
   async function attach() {

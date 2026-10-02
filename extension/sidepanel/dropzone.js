@@ -30,7 +30,6 @@ const WORKING = {
  * @property {string} name       a neutral file name: a name can identify someone
  * @property {Blob} blob         the redacted file
  * @property {string|null} text  the redacted text part, if any (all of a text file; a PDF's page text)
- * @property {{needed: boolean, count: number}|null} review
  */
 
 /**
@@ -269,14 +268,13 @@ function toRedacted(out, kind, original, job, tabId, n) {
   if (kind === 'pdf' || kind === 'image') {
     if (!out.file) throw new Error('no file part');
     const ext = kind === 'pdf' ? 'pdf' : out.fileType === 'image/jpeg' ? 'jpg' : 'png';
-    return { job, tabId, name: `redacted-${n}.${ext}`, blob: new Blob([out.file], { type: out.fileType }), text,
-      review: out.review };
+    return { job, tabId, name: `redacted-${n}.${ext}`, blob: new Blob([out.file], { type: out.fileType }), text };
   }
   if (text === null) throw new Error('no text part');
   const ownExt = extOf(original);
   const ext = kind === 'txt' ? (/^[a-z0-9]{1,5}$/.test(ownExt) ? ownExt : 'txt') : 'md'; // Word comes back as Markdown
   const type = kind === 'txt' ? 'text/plain' : 'text/markdown';
-  return { job, tabId, name: `redacted-${n}.${ext}`, blob: new Blob([out.text], { type }), text, review: out.review };
+  return { job, tabId, name: `redacted-${n}.${ext}`, blob: new Blob([out.text], { type }), text };
 }
 
 function sizeOf(bytes) {

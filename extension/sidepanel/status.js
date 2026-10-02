@@ -3,9 +3,10 @@
  * the chat the panel is working for, the "Keep Redactit ready" switch, and the review
  * mode as the worker reports it.
  *
- * The review mode is shown, never set here: it comes from policy, so a panel cannot turn
- * review off for an organisation that requires it. A mode the panel does not know is
- * shown as off, the state that promises the user nothing.
+ * The review mode is shown, never set here, and there is no switch for it: it is the
+ * policy the host loaded, so a user cannot turn review off when the admin asks for it.
+ * It is null until the host has loaded that policy; a mode the panel does not know is
+ * shown as off, the display that promises the user nothing.
  */
 import { $, findTarget, icon, onTargetChange } from './common.js';
 
@@ -16,12 +17,17 @@ const REVIEW_MODES = {
     line: 'Pastes and files Redactit is unsure about wait here for your review.',
   },
   off: { value: 'Off', line: 'Review is off: redacted pastes and files go straight to the chat.' },
+  pending: {
+    value: 'Not known yet',
+    line: "Review follows your organization's policy, which Redactit's app reports once it has started.",
+  },
 };
 
-/** The worker's review mode: top-level `reviewMode`, or the older `settings.reviewMode`. */
+/** The policy's review mode from the worker's status: null (not loaded yet) is 'pending'. */
 export function reviewModeOf(status) {
-  const mode = status ? status.reviewMode ?? status.settings?.reviewMode : null;
-  return Object.prototype.hasOwnProperty.call(REVIEW_MODES, mode) ? mode : 'off';
+  const mode = status ? status.reviewMode : null;
+  if (mode === null || mode === undefined) return 'pending';
+  return Object.prototype.hasOwnProperty.call(REVIEW_MODES, mode) && mode !== 'pending' ? mode : 'off';
 }
 
 /** [tone, short label, sentence] for the host's state. */

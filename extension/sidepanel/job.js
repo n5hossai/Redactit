@@ -66,7 +66,6 @@ export class Blocked extends Error {
  * @property {string} [fileType]
  * @property {Uint8Array} [text]
  * @property {string} [textType]
- * @property {{needed: boolean, count: number}|null} review  what the host was unsure of
  */
 
 /**
@@ -175,7 +174,7 @@ function split(header, chunks) {
   }
   if (at !== header.size) throw new Error('short');
   /** @type {JobResult} */
-  const out = { review: reviewOf(header.review) };
+  const out = {};
   let offset = 0;
   for (const part of header.parts) {
     const slice = bytes.subarray(offset, offset + part.size);
@@ -184,13 +183,6 @@ function split(header, chunks) {
     else if (part.name === 'text') Object.assign(out, { text: slice, textType: part.media_type });
   }
   return out;
-}
-
-/** `review: {needed, count}` on a result says the host was unsure of some spans. Anything
- * not shaped like that is read as "nothing to say". */
-export function reviewOf(value) {
-  if (!value || typeof value !== 'object' || value.needed !== true) return null;
-  return { needed: true, count: Number.isInteger(value.count) && value.count > 0 ? value.count : 0 };
 }
 
 function toB64(blob) {
