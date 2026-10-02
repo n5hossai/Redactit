@@ -22,7 +22,7 @@
   if (globalThis.RedactitIntercept) return; // once per frame
   globalThis.RedactitIntercept = true;
 
-  // A test build may rewrite this line: tests/e2e/build.py.
+  // A test build may rewrite this line: tests/e2e/browserkit.py.
   const ADAPTER_CHECK_MS = 15_000;
 
   const RAW_CHUNK = 384 * 1024; // the host's chunk size (src/redactit/hosts/native.py)

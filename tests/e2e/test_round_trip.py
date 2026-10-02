@@ -159,35 +159,37 @@ def test_an_adapter_whose_selectors_are_missing_falls_back_and_still_redacts(env
     assert_no_raw(page_view(other))
 
 
-def test_the_panel_api_redacts_text_and_holds_results_for_review(env, chat):
+def test_the_panel_redacts_text_and_remaps_a_reply_with_the_tabs_scope(env, chat):
     b = env.browser
     panel = b.panel()
     tab = b.evaluate("chrome.tabs.query({url: 'https://claude.ai/*'}).then(([t]) => t.id)")
     out = b.api(panel, {"type": "redactit/redact-text", "text": PASTE, "tabId": tab})
-    assert out["ok"] is True and out["text"].startswith("Please email ")
+    assert out["ok"] is True and out["text"] == chat.locator(".ProseMirror").inner_text()  # one scope per tab
     assert_no_raw(out["text"])
+    status = b.api(panel, {"type": "redactit/status"})
+    assert status["reviewMode"] in ("always", "low_confidence") and "reviewMode" not in status["settings"]
 
-    editor = chat.locator(".ProseMirror")
-    b.evaluate("chrome.storage.local.set({reviewMode: 'always'})")
-    try:
-        for approve in (True, False):
-            chat.evaluate("document.querySelector('.ProseMirror').textContent = ''")
-            b.paste(chat, ".ProseMirror", PASTE)
-            reviews = wait_for(lambda: b.api(panel, {"type": "redactit/review-list"}), timeout=120)
-            assert [(r["kind"], r["site"]) for r in reviews] == [("text", "claude.ai")]
-            assert "review" in wait_for(lambda: (t := notice_text(b.context, chat)) and "review" in t and t)
-            held = b.api(panel, {"type": "redactit/review-get", "job": reviews[0]["job"]})
-            assert_no_raw(held["text"])
-            assert editor.inner_text() == ""  # nothing reaches the page until the review ends
-            decided = b.api(panel, {"type": "redactit/review-decide", "job": reviews[0]["job"], "approve": approve})
-            assert decided == {"ok": True}
-            if approve:
-                assert wait_for(lambda: editor.inner_text()) == held["text"]
-            else:
-                assert wait_for(lambda: b.recent()[0]["code"] == "review_rejected")
-                assert editor.inner_text() == ""
-    finally:
-        b.evaluate("chrome.storage.local.set({reviewMode: 'off'})")
+    reply = "Sure, I will write to [PERSON_1] at [EMAIL_1]."
+    back = b.api(panel, {"type": "redactit/remap", "text": reply, "tabId": tab})
+    assert back == {"ok": True, "text": f"Sure, I will write to {NAME} at {EMAIL}."}
+    b.open("https://claude.ai/chat/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0")  # a chat nothing was redacted in
+    other = b.evaluate("chrome.tabs.query({url: 'https://claude.ai/chat/*'}).then(([t]) => t.id)")
+    assert b.api(panel, {"type": "redactit/remap", "text": reply, "tabId": other})["text"] == reply
+    assert_no_raw(page_view(chat))  # the real values went to the panel only
+
+
+def test_with_the_guard_in_place_a_normal_paste_still_arrives_redacted(env, chat):
+    """The main-world guard (tests/e2e/test_guard.py) refuses the page's own clipboard
+    reads; a paste, the path the guard steers sites to, still arrives redacted."""
+    b = env.browser
+    b.context.grant_permissions(["clipboard-read", "clipboard-write"], origin="https://claude.ai")
+    chat.bring_to_front()
+    assert chat.evaluate(browserkit.GUARD_PROBE) == browserkit.GUARD_REFUSED
+    chat.evaluate("document.getElementById('plain').value = ''")
+    b.paste(chat, "#plain", PASTE)
+    value = wait_for(lambda: chat.input_value("#plain"), timeout=120)
+    assert value.startswith("Please email ")
+    assert_no_raw(value)
     assert_no_raw(page_view(chat))
 
 

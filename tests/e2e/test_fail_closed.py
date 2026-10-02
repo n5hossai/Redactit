@@ -123,8 +123,9 @@ def test_keep_ready_starts_the_host_at_page_load_and_reconnects_after_a_crash(se
 @pytest.mark.parametrize(("mode", "code", "says"), [
     ("engine-error", "engine_unavailable", "engine could not start"),
     ("garbage", "protocol", "could not check"),
+    ("v1", "host_incompatible", "different versions"),
 ])
-def test_an_engine_or_protocol_error_blocks_the_paste(setup, needs_registry, mode, code, says):
+def test_an_engine_protocol_or_version_error_blocks_the_paste(setup, needs_registry, mode, code, says):
     s = setup(host=mode)
     page = s.browser.open(CHAT)
     s.browser.paste(page, ".ProseMirror", PASTE)
