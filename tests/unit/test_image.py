@@ -211,10 +211,10 @@ def test_a_span_over_two_lines_gets_a_box_on_each(monkeypatch):
     span = Span(text.index("Priya"), text.index(" today"), "PERSON", 0.9, "test")
     decision = Decision(span, "pseudonymize", "entities.PERSON", "test")
     engine = SimpleNamespace(
-        policy=SimpleNamespace(entities={}), audit=None,
+        policy=SimpleNamespace(entities={}, effective_dial=lambda site=None: 3), audit=None,
         redact=lambda t, scope, **kw: Result("", [decision], ["[PERSON_1]"]),
     )
-    monkeypatch.setattr(ocr, "read_lines", lambda img: lines)
+    monkeypatch.setattr(ocr, "read_lines", lambda img, dial: lines)
     boxes, _ = find_boxes(Image.new("RGB", (200, 100)), engine, "t")
     assert boxes == [
         Box(ocr.char_quad(lines[0], 8, 13), "[PERSON_1]"),
@@ -223,6 +223,19 @@ def test_a_span_over_two_lines_gets_a_box_on_each(monkeypatch):
     decision = Decision(span, "mask", "entities.PERSON", "test")  # only a pseudonym is printed on the box
     engine.redact = lambda t, scope, **kw: Result("", [decision], ["*****"])
     assert {b.label for b in find_boxes(Image.new("RGB", (200, 100)), engine, "t")[0]} == {None}
+
+
+def test_a_sites_own_dial_reaches_ocr_and_detection(monkeypatch):
+    """A site set to the strictest dial gets every OCR pass, and its dial for detection."""
+    seen = {}
+    engine = SimpleNamespace(
+        policy=SimpleNamespace(entities={}, effective_dial=lambda site=None: 5 if site == "claude.ai" else 3),
+        audit=None, redact=lambda t, scope, **kw: seen.update(site=kw.get("site")) or Result("", [], []),
+    )
+    line = ocr.Line("hello", ((0, 0), (50, 0), (50, 10), (0, 10)))
+    monkeypatch.setattr(ocr, "read_lines", lambda img, dial: seen.update(dial=dial) or [line])
+    find_boxes(Image.new("RGB", (60, 20)), engine, "t", site="claude.ai")
+    assert seen == {"dial": 5, "site": "claude.ai"}
 
 
 def test_masking_prints_the_label_once_and_keeps_later_characters_in_place():

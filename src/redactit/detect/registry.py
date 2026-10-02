@@ -5,12 +5,14 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, RecognizerResult
-from presidio_analyzer.nlp_engine import NlpEngineProvider
+import regex
+from presidio_analyzer import AnalyzerEngine, EntityRecognizer, RecognizerRegistry, RecognizerResult
+from presidio_analyzer.nlp_engine import SlimSpacyNlpEngine
 from presidio_analyzer.predefined_recognizers import CreditCardRecognizer, IbanRecognizer
 
-from redactit.types import Span
+from redactit.types import RedactitError, Span
 
+from . import scaling
 from .dictionary import CompanyTermRecognizer
 from .patterns import (
     ADDRESS,
@@ -35,6 +37,51 @@ _CHECKSUM_TYPES = {"CREDIT_CARD", "IBAN", "CA_SIN", "COMPANY_TERM"}
 _STRUCTURAL_TYPES = {"UK_NINO", "API_KEY"}
 STRUCTURAL_SCORE = 0.85
 
+# Every recognizer and the analyzer call this static method by name; the replacement keeps
+# Presidio's results and their order (scaling.py, tested against Presidio's own).
+EntityRecognizer.remove_duplicates = staticmethod(scaling.remove_duplicates)
+
+
+PATTERN_TIMEOUT_S = 60  # a search this slow is runaway backtracking, not text
+
+
+class PatternTimeout(RedactitError):
+    """A detection pattern ran past PATTERN_TIMEOUT_S, so the text was not fully checked."""
+
+
+class _FailClosed:
+    """A compiled pattern whose timeout stops the redaction instead of skipping the pattern.
+
+    Presidio catches a pattern's TimeoutError, logs it and moves on, so a crafted input could
+    pass that pattern unchecked. It also takes the limit from REGEX_TIMEOUT_SECONDS, which a
+    0 in the environment would turn into "skip every pattern". This uses a fixed limit and
+    raises, so the caller writes nothing.
+    """
+
+    def __init__(self, compiled) -> None:
+        self.wrapped = compiled
+
+    def finditer(self, text: str, timeout=None):
+        try:
+            yield from self.wrapped.finditer(text, timeout=PATTERN_TIMEOUT_S)
+        except TimeoutError:
+            raise PatternTimeout("a detection pattern timed out; nothing was redacted") from None
+
+
+def _fail_closed(recognizers: list) -> None:
+    """Wrap every regex pattern of every pattern recognizer in `_FailClosed`, once."""
+    for recognizer in recognizers:
+        for pattern in getattr(recognizer, "patterns", ()):
+            if isinstance(pattern.compiled_regex, _FailClosed):
+                # The recognizers in patterns.py are module-level objects that every Detector
+                # shares; a second Detector would otherwise wrap them again, one layer each time.
+                continue
+            flags = recognizer.global_regex_flags
+            if not pattern.compiled_regex or pattern.compiled_with_flags != flags:
+                pattern.compiled_regex = regex.compile(pattern.regex, flags=flags)
+            # Presidio recompiles when these flags differ from the recognizer's; they match.
+            pattern.compiled_regex, pattern.compiled_with_flags = _FailClosed(pattern.compiled_regex), flags
+
 
 class Detector:
     """`Detector(company_terms=[...])` builds the analyzer once (the slow part);
@@ -42,12 +89,11 @@ class Detector:
     """
 
     def __init__(self, company_terms: list[str] | None = None) -> None:
-        nlp_engine = NlpEngineProvider(
-            nlp_configuration={
-                "nlp_engine_name": "spacy",
-                "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
-            }
-        ).create_engine()
+        # Tokens, lemmas, stop words and punctuation are all Presidio reads from spaCy: no spaCy
+        # recognizer is registered. The slim engine skips the parser and spaCy's own NER (spans
+        # identical, pattern stage 17-28% faster) and never downloads a missing model.
+        nlp_engine = SlimSpacyNlpEngine(models=[{"lang_code": "en", "model_name": "en_core_web_sm"}],
+                                        auto_download=False)
         recognizers = [
             # Luhn-checked, plus the Mastercard 2-series range Presidio's regex lacks.
             CreditCardRecognizer(patterns=CreditCardRecognizer.PATTERNS + [MASTERCARD_2_SERIES]),
@@ -66,10 +112,12 @@ class Detector:
         ]
         if company_terms:
             recognizers.append(CompanyTermRecognizer(company_terms))
+        _fail_closed(recognizers)
         # Built from exactly this list, never `load_predefined_recognizers`, so spaCy's own
         # NER adds nothing: names and most addresses come from the GLiNER model (ner.py).
         registry = RecognizerRegistry(recognizers=recognizers, supported_languages=["en"])
-        self._analyzer = AnalyzerEngine(registry=registry, nlp_engine=nlp_engine, supported_languages=["en"])
+        self._analyzer = AnalyzerEngine(registry=registry, nlp_engine=nlp_engine, supported_languages=["en"],
+                                        context_aware_enhancer=scaling.LinearContextEnhancer())
 
     def detect(self, text: str) -> list[Span]:
         results = self._analyzer.analyze(text=text, language="en")

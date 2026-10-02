@@ -169,6 +169,15 @@ def test_equal_overlap_prefers_validated_then_score():
     assert [d.span for d in decisions] == [validated]
 
 
+def test_a_full_tie_names_the_same_type_whatever_order_the_spans_arrive_in():
+    policy = _policy(PASSPORT={"action": "mask"}, US_SSN={"action": "mask"})
+    passport = Span(0, 9, "PASSPORT", 0.85, "passport_pattern")
+    ssn = Span(0, 9, "US_SSN", 0.85, "us_ssn_pattern")
+    first = policy.decide("123456789", [passport, ssn])
+    second = policy.decide("123456789", [ssn, passport])
+    assert [d.span.entity_type for d in first] == [d.span.entity_type for d in second] == ["US_SSN"]
+
+
 def test_overlapping_spans_redact_their_union():
     """A validated company term inside an email must not leave the email's local part behind."""
     policy = _policy(EMAIL={"action": "pseudonymize"}, COMPANY_TERM={"action": "pseudonymize"})

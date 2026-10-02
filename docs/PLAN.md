@@ -65,6 +65,66 @@ Core types (in `types.py`):
 - `Decision`: a `Span` plus `action`, `policy_rule_id`, and `reason`. The reason is built
   from the rule, detector, score and dial. It never contains matched text.
 
+### 2.1 Folder watcher and clipboard shortcut
+
+**`redactit watch`** (`hosts/watcher.py`) redacts every file dropped into an inbox into an
+outbox, through the same per-file code and output names as `redactit redact`
+(`cli.redact_file`). One engine, with text and OCR warmed, serves the whole run.
+
+- Folders default to `inbox/` and `outbox/` in the user data folder. Only `--inbox` and
+  `--outbox` move them, never the environment, and the outbox may not be the inbox. New
+  folders are created private. Only the inbox's top level is watched.
+- The inbox is only read. A file is read once its size and mtime have held for 2 s, so a
+  file still being copied is not redacted half-written. Symlinks, junctions and mount
+  points are skipped, never followed out of the inbox; other reparse points, such as
+  OneDrive placeholders, are read as files.
+- Two inputs whose outputs share a name (notes.docx and notes.docx.md, scan.pdf and
+  scan.pdf.md) are never both written: the later one is skipped with a message. `redactit
+  redact` does the same, and refuses an `--out` folder where an output would replace an
+  input.
+- Each version of a file is redacted once. While running, a fingerprint (file ID, size,
+  mtime) tells a real change from a read. At start-up, a file whose outputs are all newer
+  than it is skipped; "newer" also counts creation time (Windows) or inode change time,
+  because a copy keeps the old mtime.
+- Outputs are staged in a private folder inside the outbox and renamed into place, and
+  the folder is removed however the watcher stops (THREAT_MODEL T11).
+- Each file gets its own pseudonym scope unless `--scope` links them: a watcher runs for
+  days, and its files go to different chats.
+- A bad file logs its type and a reason, never its name or content, and is not retried
+  until it changes. At most 64 MiB per file, as from the extension.
+- Outputs are never deleted: how long they stay is open (§12).
+
+**`redactit clip`** (`hosts/clipboard.py`) runs once per keypress and never monitors.
+It reads the clipboard's text, leaves an item a password manager marked concealed
+untouched (without reading its text), redacts the text, and writes it back as plain
+text only. The copying program's HTML and RTF copies were not checked, so they are
+dropped. It prints one line of counts. Exit status: 0 written back; 3 nothing to redact
+(no text, or concealed); 1 failed. In both non-zero cases the clipboard is untouched,
+including when it changed while the engine ran, with one exception: Windows and macOS
+must clear the clipboard before writing to it, so a write that fails after the clear
+leaves it empty. It never holds the unredacted text after a failed run.
+
+| OS | Concealed when | Read through |
+|---|---|---|
+| Windows | `ExcludeClipboardContentFromMonitorProcessing` or `Clipboard Viewer Ignore` is present, or `CanIncludeInClipboardHistory` is 0 | `ctypes` (Win32) |
+| macOS | `org.nspasteboard.ConcealedType` is present | `pyobjc-framework-Cocoa` (NSPasteboard) |
+| Linux | `x-kde-passwordManagerHint` is `secret`. GNOME and some Wayland compositors set nothing (THREAT_MODEL §5) | `wl-paste`/`wl-copy`, else `xclip`, as separate programs |
+
+**Shortcut binding** (done by the Phase 7 installers). The shortcut runs `redactit clip`
+through the same kind of launcher as the native host (§7), with no console window:
+
+- **Windows:** a Start-menu shortcut (`.lnk`) with a hotkey such as Ctrl+Alt+R.
+- **macOS:** a Quick Action that runs the launcher. The user assigns its key once in
+  System Settings > Keyboard > Keyboard Shortcuts > Services; no supported API lets an
+  installer do it (THREAT_MODEL §5). Phase 7 also checks whether macOS asks before a
+  background process reads the pasteboard.
+- **Linux:** a custom shortcut, set with `gsettings` on GNOME or `kwriteconfig` on KDE;
+  elsewhere the installer prints the command to bind.
+
+A shortcut has no terminal, so Phase 7 also decides how the one-line result is shown
+(for example, a notification driven by the exit status). Each press starts a new process
+and pays the full cold start, about 6 s (§10, risk 13).
+
 ## 3. Stack
 
 Runtime dependencies must be MIT, Apache-2.0 or BSD. Exceptions are listed in section 8.
@@ -74,11 +134,11 @@ Runtime dependencies must be MIT, Apache-2.0 or BSD. Exceptions are listed in se
 | Language | Python 3.12, `uv` for envs | PSF / MIT | Required by the brief; `uv` gives a lockfile. |
 | Detection framework | Presidio analyzer + anonymizer | MIT | Recognizer registry, context scoring and operators already exist. |
 | NER | GLiNER with a PII-tuned checkpoint | Apache-2.0 (package) | See 3.1. |
-| NLP engine for Presidio | spaCy `en_core_web_sm` | MIT | Tokenisation only; GLiNER does the entity work. |
+| NLP engine for Presidio | spaCy `en_core_web_sm` | MIT | Tokens and lemmas only, through Presidio's slim engine (no parser, no spaCy NER, never downloads); GLiNER does the entity work. |
 | Validators, secrets | In-house (Luhn, IBAN mod-97, SIN, SSN, NINO, key formats) | n/a | Each is under 20 lines. `python-stdnum` is LGPL, so it is excluded. |
 | PDF | `pypdfium2` | Apache-2.0 / BSD-3 | Text with character boxes plus page rendering. PyMuPDF is AGPL, so it is excluded. |
 | PDF rebuild | `pypdfium2`: a new document of JPEG page images | Apache-2.0 / BSD-3 | Writes raster pages only, never a text layer. `img2pdf` is LGPL, so it is excluded. |
-| OCR | RapidOCR on `onnxruntime` | Apache-2.0 / MIT | Installs with pip, word boxes, ONNX files can be pinned. |
+| OCR | RapidOCR on `onnxruntime` | Apache-2.0 / MIT | Installs with pip, word boxes; its bundled ONNX files are pinned by SHA-256. |
 | Faces | OpenCV YuNet (`opencv-python-headless`) | Apache-2.0 | Small, CPU-fast, returns boxes. |
 | QR / barcodes | `zxing-cpp` | Apache-2.0 | Detects and locates many symbologies. `pyzbar` needs `zbar` (LGPL). |
 | DOCX | `zipfile` + `defusedxml` walk of the OOXML parts | PSF (flagged) | Blocks XML entity attacks. `python-docx` does not expose comments or tracked changes well. |
@@ -86,7 +146,7 @@ Runtime dependencies must be MIT, Apache-2.0 or BSD. Exceptions are listed in se
 | Policy | `PyYAML` `safe_load` + `pydantic` | MIT | Typed, validated config with clear errors. |
 | CLI | `argparse` | PSF | Standard library, one less dependency. |
 | Folder watcher | `watchdog` | Apache-2.0 | Cross-platform file events. |
-| Clipboard | `ctypes` (Windows), `pyobjc` (macOS), `wl-paste`/`xclip` (Linux) | PSF / MIT / external process | Reads the "concealed" markers that password managers set. |
+| Clipboard | `ctypes` (Windows), `pyobjc-framework-Cocoa` (macOS only, by an environment marker), `wl-paste`/`xclip` (Linux) | PSF / MIT / external process | Reads the "concealed" markers that password managers set. |
 | Tests | `pytest`, `pytest-socket`, `Faker` | MIT | `pytest-socket` makes any network call fail the test. |
 | Test corpus | `reportlab` (digital PDFs), `Faker` | BSD / MIT | Builds the synthetic corpus. Test-only. The verifier reuses the runtime PDF, OCR, barcode and face libraries with its own settings. |
 | Build backend | `hatchling` | MIT | Standard PEP 517 backend for `uv`. |
@@ -124,10 +184,10 @@ was rejected: it scored 4 of 15 synthetic addresses below the default threshold.
 Redactit/
 ├─ pyproject.toml            # deps, entry point `redactit`
 ├─ uv.lock
-├─ src/redactit/models.lock.json  # model URL (pinned revision) and SHA-256
+├─ src/redactit/models.lock.json  # SHA-256 per model: URL at a pinned revision, or file inside a package
 ├─ src/redactit/policy.default.yaml  # annotated default policy, the base layer
 ├─ src/redactit/
-│  ├─ cli.py                 # redact, verify, clip, watch, setup-models
+│  ├─ cli.py                 # redact, verify, clip, watch, setup-models, host
 │  ├─ types.py               # Segment, Span, Decision
 │  ├─ pipeline.py            # extract -> detect -> decide -> apply -> render
 │  ├─ policy.py              # schema, managed + user layering, dial thresholds
@@ -136,7 +196,7 @@ Redactit/
 │  ├─ audit.py               # JSONL writer, sanitised reasons only
 │  ├─ safety.py              # blocks IP sockets and DNS inside the engine
 │  ├─ managed.py             # OS-derived admin policy path, admin-ownership check
-│  ├─ models.py              # load-time SHA-256 verification
+│  ├─ models.py              # load-time SHA-256 verification, files held until loaded
 │  ├─ detect/
 │  │  ├─ patterns.py         # regexes + validators (Luhn, IBAN, SIN, SSN, NINO)
 │  │  ├─ secrets.py          # API key and token formats, PEM blocks, JWTs
@@ -149,7 +209,7 @@ Redactit/
 │  │  └─ image.py            # OCR + faces + codes, fill, re-encode
 │  ├─ ocr.py                 # RapidOCR wrapper shared by pdf and image
 │  └─ hosts/
-│     ├─ native.py           # native messaging framing and chunking
+│     ├─ native.py           # native messaging: framing, chunking, queue, warm-up, origin check
 │     ├─ watcher.py          # inbox -> outbox
 │     └─ clipboard.py        # read, skip concealed, redact, write back
 ├─ extension/
@@ -168,6 +228,9 @@ Redactit/
 │  ├─ leak/run.py            # re-extract, re-OCR, score, write report
 │  ├─ unit/                  # per module
 │  ├─ test_offline.py        # engine run with sockets disabled
+│  ├─ test_host.py           # native host round trips in Chrome's frames (hostkit.py starts it)
+│  ├─ test_watch.py          # folder watcher round trip; `redactit watch` stopped from the keyboard
+│  ├─ test_clip.py           # `redactit clip` on the real clipboard (skipped without one)
 │  ├─ test_licenses.py       # fails on any non-permissive dependency
 │  └─ test_leak_harness.py   # harness must see every value on unredacted input
 ├─ docs/
@@ -231,7 +294,27 @@ are committed.
   port usually keeps it alive, but not reliably in every Chrome build.
 - Chunking: Chrome caps host-to-extension messages at 1 MB and extension-to-host messages
   at 64 MiB. Both directions use the same numbered-frame protocol (frames of 512 KiB),
-  so one code path covers both.
+  so one code path covers both. The protocol is specified in `hosts/native.py`:
+  - a payload travels as base64 chunks of 384 KiB (512 KiB of base64), numbered from 0,
+    with a total that must follow from the declared size;
+  - a strict schema: unknown types or fields are refused, and errors carry a stable code
+    and never the input;
+  - caps: 64 MiB per paste or file (Chrome's own per-message cap the other way; pastes get
+    no smaller cap), 16 requests and 128 MiB in flight;
+  - requests queue in arrival order, report progress (page N of M for PDFs), and can be
+    cancelled.
+- Warm host (speed plan decision 1): the host announces `warming`, then `ready-text` once
+  text detection loads (OCR keeps warming in the background), then `ready-all`. A request
+  that arrives while warming waits; it is never dropped. The host exits after 30 idle
+  minutes and checks the caller's origin against its installed manifest.
+- Host launch (built in Phase 7): the manifest's `path` is a small launcher the installer
+  writes. It starts the base interpreter directly, because the venv's launcher costs 1.37 s
+  against 0.3-1.1 s for base Python:
+  `<base python> -I -S -c "import site, sys; site.addsitedir(r'<venv site-packages>');
+  from redactit.hosts.native import main; main()" --manifest <installed manifest> <args>`,
+  as a `.cmd` file on Windows and a `/bin/sh` script elsewhere. `-I` ignores `PYTHON*`
+  variables and the user site; `-S` keeps the base interpreter's own packages off the path,
+  so only the venv's pinned packages load. `tests/test_host.py` starts the host this way.
 - Review UX: `chrome.sidePanel.open()` only works synchronously inside a user gesture in
   extension code (Chrome 116+). When a paste needs review, the send is held and an
   in-page notice asks the user to click the Redactit toolbar button, which opens the panel
@@ -245,10 +328,17 @@ are committed.
   exception type enforce it; the leak test also scans logs and the audit file.
 - No telemetry of any kind.
 - Temporary files go in a private directory (`0700` on POSIX, user-only ACL on Windows),
-  deleted in `finally`. In-memory processing is the default.
+  deleted in `finally`. In-memory processing is the default. The folder watcher is the
+  only writer of temporary files: its private folder sits inside the outbox, so the final
+  rename stays on one volume and is atomic. On Windows that ACL needs Python 3.12.4 or
+  later, which the watcher checks.
 - Models are downloaded once by `redactit setup-models`, pinned by SHA-256, and verified at
-  every load. At runtime the engine blocks every non-Unix socket and every DNS lookup in
-  its own process, so no dependency can phone home.
+  every load, with no hash cache. RapidOCR's three ONNX files ship inside its package and
+  are pinned too; setup checks them and never downloads them. The hash runs in a thread
+  while the imports do. Until a model is loaded, Windows holds it open against writes,
+  renames and deletes; elsewhere it is hashed again after loading and refused if it
+  changed. At runtime the engine blocks every non-Unix socket and every DNS lookup in its
+  own process, so no dependency can phone home.
 - CI runs a license check that fails on anything outside MIT, Apache or BSD unless it is
   listed here.
 - Synthetic data only. Real documents are never committed.
@@ -282,7 +372,9 @@ linked into Redactit.
    values recorded in a manifest. It includes hard cases: values split across lines, cards
    with spaces or dashes, PII in DOCX headers, comments and deleted revisions, text inside
    images embedded in PDFs, rotated and cropped PDF pages, low-contrast and rotated text,
-   small text in a 4K screenshot, faces, and QR codes that encode PII.
+   small text in a 4K screenshot, faces, and QR codes that encode PII. Every corpus also
+   holds 48 rotated stress pages (one value at 90, 180 or 270 degrees, 14-32 px, black or
+   grey) and a scanned page whose only text runs sideways, which probe the OCR gate.
 2. Redact the corpus at the admin floor and at the tightest dial.
 3. Verify each output **independently of the redactor**. Correlated errors would hide
    leaks, so the verifier uses higher-resolution rendering (300 DPI) and its own OCR
@@ -312,10 +404,11 @@ floor. Precision is reported, not gated.
 | 6 | Another extension or process talks to the host | `allowed_origins` lists one fixed extension ID; host checks the caller origin |
 | 7 | A user edits the policy to weaken it | Managed layer + tighten-only merge |
 | 8 | Context re-identifies a pseudonym ("the CEO of [ORG_1]") | Documented residual risk; out of scope for the MVP |
-| 9 | OCR misses small, rotated or low-contrast text | 200 DPI raster, full-size reads, four quarter turns (RapidOCR's own classifier only knows 180 degrees), a 2x pass for small images, padded boxes, corpus hard cases |
-| 10 | Slow redaction breaks the chat flow (measured: 6.1 s cold start, about 11 s per PDF page, 9.5 s per 1080p screenshot) | Warm host, faster OCR and visible progress; see docs/perf/speed-plan.md (proposed) |
+| 9 | OCR misses small, rotated or low-contrast text | 200 DPI raster, full-size reads, four quarter turns (RapidOCR's own classifier only knows 180 degrees; the three turned reads are skipped only when the upright read left no box unread, never at dial 5), a 2x pass for small images, padded boxes, corpus hard cases |
+| 10 | Slow redaction breaks the chat flow (measured: 6.1 s cold start, about 11 s per PDF page, 9.5 s per 1080p screenshot) | Warm host, faster OCR and visible progress; see docs/perf/speed-plan.md (approved) |
 | 11 | OS keychain unavailable (headless Linux) | Fail closed with a clear setup message |
 | 12 | Face test images must be synthetic and license-clean | Public-domain AI-generated portraits; sources in `tests/fixtures/faces/SOURCES.md` |
+| 13 | Every clipboard shortcut press pays the full cold start (about 6 s), because `redactit clip` is a new process that loads and verifies the models each time | Accepted for now and documented in §2.1. A later phase lets `clip` hand its text to an engine that is already running instead of loading its own. Not built yet. |
 
 ## 11. Delivery
 
@@ -345,4 +438,8 @@ change is visual, and the leak report attached. Nothing merges without owner app
 
 ## 12. Open questions
 
-None open. Face fixtures were settled in Phase 3 (risk 12).
+Face fixtures were settled in Phase 3 (risk 12).
+
+- **Outbox retention.** How long should the folder watcher's redacted copies stay in the
+  outbox? Until the owner decides, nothing is deleted. `OUTBOX_RETENTION_DAYS = None` in
+  `hosts/watcher.py` is where the chosen value goes.

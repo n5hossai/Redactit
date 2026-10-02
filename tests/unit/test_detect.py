@@ -515,3 +515,32 @@ def test_an_iban_in_printed_groups_is_covered_whole(det):
 
 def test_lower_case_passport_letters_must_start_a_word(det):
     assert not _spans_of(det, "Deadline 20240315 for the report", "PASSPORT")
+
+
+# --- A pattern that runs out of time stops the redaction; it is never skipped. -------------
+
+def test_a_pattern_timeout_stops_detection_instead_of_skipping(det, monkeypatch):
+    from redactit.detect import registry
+
+    monkeypatch.setattr(registry, "PATTERN_TIMEOUT_S", 1e-9)  # every search now runs out of time
+    with pytest.raises(registry.PatternTimeout):
+        det.detect("Contact priya.okafor@corp.local about card 4111 1111 1111 1111. " * 200)
+
+
+def test_shared_recognizers_are_wrapped_once_however_many_detectors_are_built(det):
+    from redactit.detect import patterns, registry
+
+    for _ in range(3):
+        Detector()
+    for recognizer in (patterns.ADDRESS, patterns.EMAIL, patterns.PHONE, patterns.UK_NINO):
+        for pattern in recognizer.patterns:
+            assert isinstance(pattern.compiled_regex, registry._FailClosed)
+            assert not isinstance(pattern.compiled_regex.wrapped, registry._FailClosed)  # depth 1
+
+
+def test_presidios_own_timeout_setting_cannot_switch_patterns_off(det, monkeypatch):
+    import presidio_analyzer.pattern_recognizer as presidio_patterns
+
+    monkeypatch.setattr(presidio_patterns, "REGEX_TIMEOUT_SECONDS", 0)  # as REGEX_TIMEOUT_SECONDS=0 would
+    text = "Mail priya.okafor@corp.local today."
+    assert _covers(_spans_of(det, text, "EMAIL"), text, "priya.okafor@corp.local")

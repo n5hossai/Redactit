@@ -8,6 +8,11 @@ Every scenario runs in a fresh process: the engine loads, one untimed warm-up ca
 host that stays open between requests would see. Cold start is timed on its own, from
 launching Python to a loaded engine.
 
+Images are timed twice over. Each "new size" repeat is grown by GROW_PX more on both sides,
+as every real screenshot is a size the engine has not seen; that is the image's median_s.
+The "same size" repeats re-time the warm-up image, as the Phase 3 benchmark did; that hid
+what a new size costs (docs/perf/speed-plan.md, decision 2).
+
 Stage times come from wrapping the leaf functions (OCR passes, the two detectors, faces,
 barcodes, page render and write), so production code is not touched. Whatever the leaves
 do not cover (decoding, encoding, policy, pseudonyms, audit) is reported as "other".
@@ -57,6 +62,7 @@ SCENARIOS = [
 ]
 COLD_RUNS = 3
 PAGE_CHARS = 3000  # about one page of prose
+GROW_PX = 32  # each new-size repeat of an image is this much wider and taller than the last
 
 
 # --- inputs -------------------------------------------------------------------------------
@@ -161,6 +167,20 @@ def _png(img) -> bytes:
     return out.getvalue()
 
 
+def grown(data: bytes, px: int) -> bytes:
+    """The image with `px` more columns and rows of its corner colour, in its own format: a new
+    size with the same content, so only the size differs between repeats."""
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data)) as img:
+        fmt, rgb = img.format, img.convert("RGB")
+    canvas = Image.new("RGB", (rgb.width + px, rgb.height + px), rgb.getpixel((0, 0)))
+    canvas.paste(rgb, (0, 0))
+    out = io.BytesIO()
+    canvas.save(out, fmt, **({"quality": 90} if fmt == "JPEG" else {}))
+    return out.getvalue()
+
+
 def build_input(scenario: str) -> tuple[str, bytes | str, dict]:
     """(kind, data, description) for one scenario id."""
     vf = _vf()
@@ -216,7 +236,7 @@ class Stages:
         return out
 
 
-def _ocr_pass(view, turns, scale):
+def _ocr_pass(view, turns, scale, **_):
     return "OCR, 2x pass for small text" if scale > 1 else ("OCR, turned passes" if turns else "OCR, upright pass")
 
 
@@ -246,7 +266,7 @@ def memory_mb() -> tuple[float | None, float]:
     return None, peak / (2**20 if sys.platform == "darwin" else 2**10)
 
 
-def _engine(tmp: Path):
+def _engine(tmp: Path, verified=None):
     import yaml
     from redactit.audit import AuditLog
     from redactit.pipeline import Engine
@@ -256,7 +276,7 @@ def _engine(tmp: Path):
     policy = yaml.safe_load(DEFAULT_POLICY.read_text(encoding="utf-8"))  # the defaults, at dial 3
     (tmp / "policy.yaml").write_text(yaml.safe_dump(policy), encoding="utf-8")
     vault = Vault(tmp / "vault.db", os.urandom(32))  # a throwaway key: never the real keychain
-    return Engine(load_policy(tmp / "policy.yaml"), vault, AuditLog(tmp / "audit.jsonl"))
+    return Engine(load_policy(tmp / "policy.yaml"), vault, AuditLog(tmp / "audit.jsonl"), verified=verified)
 
 
 def run_scenario(scenario: str, repeats: int) -> dict:
@@ -278,53 +298,69 @@ def run_scenario(scenario: str, repeats: int) -> dict:
         stages.wrap(pdf, "_append_page", "Write page")
         stages.wrap(docx, "docx_to_markdown", "Word to Markdown")
 
-        def call() -> int:
+        def call(payload) -> int:
             if kind == "text":
-                return len(engine.redact(data, "bench", file_type="txt").text.encode())
+                return len(engine.redact(payload, "bench", file_type="txt").text.encode())
             if kind == "docx":
-                text = docx.docx_to_markdown(data)
+                text = docx.docx_to_markdown(payload)
                 return len(engine.redact(text, "bench", file_type="docx").text.encode())
             if kind == "pdf":
-                out, markdown = pdf.redact_pdf(data, engine, "bench")
+                out, markdown = pdf.redact_pdf(payload, engine, "bench")
                 return len(out) + len(markdown.encode())
-            out, _, text = image.redact_image(data, engine, "bench")
+            out, _, text = image.redact_image(payload, engine, "bench")
             return len(out) + len(text.encode())
+
+        def timed(payloads) -> tuple[list[float], dict[str, list[float]], int]:
+            runs, per_stage, out_bytes = [], defaultdict(list), 0
+            for payload in payloads:
+                start = time.perf_counter()
+                out_bytes = call(payload)
+                runs.append(time.perf_counter() - start)
+                for stage, seconds in stages.take().items():
+                    per_stage[stage].append(seconds)
+            return runs, per_stage, out_bytes
 
         after_load = memory_mb()[0]
         start = time.perf_counter()
-        call()  # warm-up: first OCR use loads its models
+        call(data)  # warm-up: first OCR use loads its models
         warmup = time.perf_counter() - start
         stages.take()
-        runs, per_stage, out_bytes = [], defaultdict(list), 0
-        for _ in range(repeats):
-            start = time.perf_counter()
-            out_bytes = call()
-            runs.append(time.perf_counter() - start)
-            for stage, seconds in stages.take().items():
-                per_stage[stage].append(seconds)
+        if kind == "image":  # a size not seen before on every repeat, prepared before timing starts
+            runs, per_stage, _ = timed([grown(data, GROW_PX * k) for k in range(1, repeats + 1)])
+            same, _, out_bytes = timed([data] * repeats)
+        else:
+            runs, per_stage, out_bytes = timed([data] * repeats)
         current, peak = memory_mb()
         engine.vault.close()  # Windows cannot delete an open file
     stage_median = {s: statistics.median(v + [0.0] * (repeats - len(v))) for s, v in per_stage.items()}
     stage_median["Other"] = max(statistics.median(runs) - sum(stage_median.values()), 0.0)
-    return {"id": scenario, "kind": kind, "input": described, "repeats": repeats, "warmup_s": warmup,
-            "runs_s": runs, "median_s": statistics.median(runs), "min_s": min(runs), "max_s": max(runs),
-            "stages_s": stage_median, "memory_after_load_mb": after_load, "memory_now_mb": current,
-            "memory_peak_mb": peak, "output_bytes": out_bytes}
+    result = {"id": scenario, "kind": kind, "input": described, "repeats": repeats, "warmup_s": warmup,
+              "runs_s": runs, "median_s": statistics.median(runs), "min_s": min(runs), "max_s": max(runs),
+              "stages_s": stage_median, "memory_after_load_mb": after_load, "memory_now_mb": current,
+              "memory_peak_mb": peak, "output_bytes": out_bytes}
+    if kind == "image":  # median_s above is the new-size median
+        result |= {"new_size_grow_px": GROW_PX, "same_size_runs_s": same, "same_size_median_s": statistics.median(same)}
+    return result
 
 
 def run_cold() -> dict:
     """Imports and engine load in this fresh process, by stage."""
     marks = {"process_start": time.perf_counter()}
-    from redactit import models, pipeline  # noqa: F401 (the import cost is what is measured)
+    from redactit import models
+
+    pending = models.verify(models.TEXT_MODELS)  # as the interfaces do: hashed while the imports run
+    from redactit import pipeline  # noqa: F401 (the import cost is what is measured)
 
     marks["imported"] = time.perf_counter()
     stages = Stages()
-    stages.wrap(models, "path_for", "Model hash check")
+    # What the hash still costs after the imports, plus the second hash where files cannot be held.
+    stages.wrap(models.Verification, "__enter__", "Model hash check")
+    stages.wrap(models.Verification, "__exit__", "Model hash check")
     stages.wrap(pipeline, "Detector", "Presidio and spaCy load")
     stages.wrap(pipeline, "GlinerNer", "Name model load")
     with tempfile.TemporaryDirectory() as tmp:
         start = time.perf_counter()
-        engine = _engine(Path(tmp))
+        engine = _engine(Path(tmp), pending)
         load = time.perf_counter() - start
         engine.vault.close()  # Windows cannot delete an open file
     out = {"Imports": marks["imported"] - marks["process_start"], **stages.take()}

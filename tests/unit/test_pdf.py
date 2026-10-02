@@ -109,3 +109,27 @@ def test_oversized_pages_are_refused(engine):
     c.save()
     with pytest.raises(PdfError, match="too large"):
         redact_pdf(buf.getvalue(), engine, scope="t")
+
+
+def test_a_sites_own_rules_reach_the_text_layer_and_ocr(monkeypatch):
+    """`site` must reach the text layer's detection, OCR's dial and the OCR text's detection."""
+    from types import SimpleNamespace
+
+    from redactit import ocr
+    from redactit.pipeline import Result
+
+    seen = []
+    engine = SimpleNamespace(
+        policy=SimpleNamespace(entities={}, effective_dial=lambda site=None: seen.append(("dial", site)) or 3),
+        audit=None,
+        redact=lambda text, scope, **kw: seen.append((kw["file_type"], kw["site"])) or Result(text, [], []),
+    )
+    line = ocr.Line("Contact", ((0, 0), (70, 0), (70, 10), (0, 10)))
+    monkeypatch.setattr(ocr, "read_lines", lambda img, dial: [line])
+    redact_pdf(_pdf([["Contact Priya Okafor."]]), engine, scope="t", site="chatgpt.com")
+    assert seen == [("pdf", "chatgpt.com"), ("dial", "chatgpt.com"), ("pdf", "chatgpt.com")]
+
+
+def test_the_redacted_pdf_does_not_say_when_it_was_redacted(engine):
+    out, _ = redact_pdf(_pdf([["Nothing sensitive here."]]), engine, scope="t")
+    assert pdfium.PdfDocument(out).get_metadata_dict().get("CreationDate") == "D:19700101000000+00'00'"

@@ -1,6 +1,7 @@
 """Charts for the timing report: SVG files that follow the viewer's light or dark theme.
 
     py -3.12 -m uv run python tests/bench/charts.py docs/perf/phase-3-timing.json docs/perf
+    py -3.12 -m uv run python tests/bench/charts.py docs/perf/phase-4/timing.json docs/perf/phase-4 docs/perf/phase-4/compare.json
 
 Hand-written SVG, so the report needs no plotting library (and no new license to vet).
 Colours are the categorical slots of a colour-blind-checked palette, in its fixed order.
@@ -138,14 +139,18 @@ def speed(report: dict, out: Path) -> None:
             first_slower = s["warmup_s"] - s["median_s"] >= 0.5  # a ring only where the first file costs more
             if first_slower:
                 svg.dot(x(s["warmup_s"]), cy, "s2", hollow=True)
+            if "same_size_median_s" in s:  # images: the same picture again, beside a new size each time
+                svg.dot(x(s["same_size_median_s"]), cy, "s3")
             svg.dot(x(s["median_s"]), cy, "s1")
             label_x = max(x(s["max_s"]), x(s["warmup_s"]) if first_slower else 0) + 10
             svg.text(min(label_x, W - 52), cy + 4, secs(s["median_s"]), "v")
             y += row_h
     svg.dot(25, 70, "s1")
-    svg.text(35, 74, "Typical run (line: fastest to slowest)", "sub")
-    svg.dot(265, 70, "s2", hollow=True)
-    svg.text(275, 74, "First file after the engine starts", "sub")
+    svg.text(35, 74, "Typical run; images at a new size each time", "sub")
+    svg.dot(340, 70, "s3")
+    svg.text(350, 74, "Same image again", "sub")
+    svg.dot(480, 70, "s2", hollow=True)
+    svg.text(490, 74, "First file after the engine starts", "sub")
     svg.save(out / "speed.svg")
 
 
@@ -227,9 +232,11 @@ def scaling(report: dict, out: Path) -> None:
                    ("PDF", "s3", [(by_id[i]["input"]["pages"], by_id[i]["median_s"])
                                   for i in ("pdf_digital_1p", "pdf_digital_4p", "pdf_digital_10p") if i in by_id])],
          "pages", False),
-        ("Screenshot size", [("Screenshot", "s1", [(by_id[i]["input"]["pixels"] / 1e6, by_id[i]["median_s"])
-                                                   for i in ("img_720p", "img_1080p", "img_1440p", "img_4k")
-                                                   if i in by_id])],
+        ("Screenshot size", [(label, colour, [(by_id[i]["input"]["pixels"] / 1e6, by_id[i][key])
+                                              for i in ("img_720p", "img_1080p", "img_1440p", "img_4k")
+                                              if key in by_id.get(i, {})])
+                             for label, colour, key in (("New size", "s1", "median_s"),
+                                                        ("Same image", "s3", "same_size_median_s"))],
          "megapixels", False),
     ]
     height, pw, gap, top, ph = 310, 200, 50, 84, 160
@@ -260,6 +267,8 @@ def scaling(report: dict, out: Path) -> None:
                 last = fx(v)
         svg.text(x0 + pw, top + ph + 30, unit, "m", "end")
         for label, colour, ps in series:
+            if not ps:  # a report from before same-size runs were recorded
+                continue
             if len(ps) > 1:
                 path = " ".join(f"{'M' if i == 0 else 'L'}{fx(a):.1f},{fy(b):.1f}" for i, (a, b) in enumerate(ps))
                 svg.add(f'<path d="{path}" fill="none" stroke="var(--{colour})" stroke-width="2" '
@@ -309,7 +318,7 @@ def _log_axis(svg: Svg, left: float, right: float, top: float, bottom: float, lo
     x = lambda s: left + (math.log10(s) - math.log10(lo)) / (math.log10(hi) - math.log10(lo)) * (right - left)  # noqa: E731
     for a, b, fill in ((lo, 1, "band"), (1, 10, "band2"), (10, hi, "band")):
         svg.add(f'<rect x="{x(a):.1f}" y="{top}" width="{x(b) - x(a):.1f}" height="{bottom - top}" fill="var(--{fill})"/>')
-    for t, label in ((0.3, "0.3 s"), (1, "1 s"), (3, "3 s"), (10, "10 s"), (30, "30 s")):
+    for t, label in ((0.1, "0.1 s"), (0.3, "0.3 s"), (1, "1 s"), (3, "3 s"), (10, "10 s"), (30, "30 s"), (100, "100 s")):
         if lo <= t <= hi:
             svg.line(x(t), top, x(t), bottom, "grid")
             svg.text(x(t), bottom + 16, label, "m", "middle")
@@ -321,10 +330,14 @@ def impact(plan: dict, out: Path) -> None:
     rows = plan["impact"]
     top, row_h, left, right = 84, 30, 250, W - 190
     height = top + len(rows) * row_h + 40
-    svg = Svg(height, "What the proposed decisions change", "Time today and with the decision, per case.")
-    svg.text(20, 30, "What the proposed decisions change", "h")
-    svg.text(20, 50, "Ring: today. Dot: with the decision. Log scale; the tag says whether it was measured", "sub")
-    x = _log_axis(svg, left, right, top - 8, top + len(rows) * row_h, 0.3, 20)
+    title = plan.get("title", "What the proposed decisions change")
+    svg = Svg(height, title, "Time before and after, per case.")
+    svg.text(20, 30, title, "h")
+    svg.text(20, 50, plan.get("subtitle", "Ring: today. Dot: with the decision. Log scale; the tag says whether it was "
+                                           "measured"), "sub")
+    lo = min(0.3, 0.8 * min(r["after_s"] for r in rows))
+    hi = max(20.0, 1.25 * max(r["before_s"] for r in rows))
+    x = _log_axis(svg, left, right, top - 8, top + len(rows) * row_h, lo, hi)
     for i, r in enumerate(rows):
         cy = top + i * row_h + row_h / 2 - 4
         svg.text(20, cy + 4, r["label"])
@@ -367,11 +380,13 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     for chart in (speed, stages, cold_start, scaling, sizes):
         chart(report, out)
-    plan = Path(sys.argv[1]).with_name("speed-plan.json")
+    # The before/after comparison: a third argument, or speed-plan.json beside the results.
+    plan = Path(sys.argv[3]) if len(sys.argv) > 3 else Path(sys.argv[1]).with_name("speed-plan.json")
     if plan.exists():  # the proposed decisions and the device comparison, when written
         data = json.loads(plan.read_text(encoding="utf-8"))
         impact(data, out)
-        devices(data, out)
+        if "devices" in data:
+            devices(data, out)
     print(sorted(p.name for p in out.glob("*.svg")))
 
 

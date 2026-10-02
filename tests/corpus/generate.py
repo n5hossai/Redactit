@@ -24,7 +24,16 @@ from faker import Faker
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from corpus_docx import DOCX_VARIANTS, build_docx
-from corpus_media import PDF_VARIANTS, build_image, build_pdf, build_screenshot
+from corpus_media import (
+    PDF_VARIANTS,
+    ROTATED_STRESS,
+    build_image,
+    build_pdf,
+    build_rotated_stress,
+    build_screenshot,
+    build_sideways_scan,
+    stress_variant,
+)
 
 LOCALES = ["en_US", "en_CA", "en_GB"]
 
@@ -286,14 +295,19 @@ def build_md(vf: ValueFactory, path: Path) -> list[dict]:
 # Orchestration
 # ---------------------------------------------------------------------------
 
-# (format, variant, extension, builder(vf, path) -> entries)
+# (format, variant, extension, builder(vf, path) -> entries, copies: None for --per-variant)
 _PLAN = (
-    [("txt", "plain", "txt", build_txt), ("md", "plain", "md", build_md)]
-    + [("docx", v, "docx", lambda vf, path, v=v: build_docx(v, vf, path)) for v in DOCX_VARIANTS]
-    + [("pdf", v, "pdf", lambda vf, path, v=v: build_pdf(v, vf, path)) for v in PDF_VARIANTS]
-    + [("png", "plain", "png", lambda vf, path: build_image("png", vf, path))]
-    + [("png", "screenshot_4k", "png", build_screenshot)]
-    + [("jpg", "plain", "jpg", lambda vf, path: build_image("jpg", vf, path))]
+    [("txt", "plain", "txt", build_txt, None), ("md", "plain", "md", build_md, None)]
+    + [("docx", v, "docx", lambda vf, path, v=v: build_docx(v, vf, path), None) for v in DOCX_VARIANTS]
+    + [("pdf", v, "pdf", lambda vf, path, v=v: build_pdf(v, vf, path), None) for v in PDF_VARIANTS]
+    + [("png", "plain", "png", lambda vf, path: build_image("png", vf, path), None)]
+    + [("png", "screenshot_4k", "png", build_screenshot, None)]
+    + [("jpg", "plain", "jpg", lambda vf, path: build_image("jpg", vf, path), None)]
+    # Added after the rest, so every document above stays byte-identical to older corpora.
+    + [("pdf", "scanned_sideways", "pdf", build_sideways_scan, None)]
+    # Each rotated stress case once per corpus: all 48 in every seed, whatever --per-variant says.
+    + [("png", stress_variant(*case), "png", lambda vf, path, case=case: build_rotated_stress(case, vf, path), 1)
+       for case in ROTATED_STRESS]
 )
 
 
@@ -301,8 +315,8 @@ def generate(seed: int, out: Path, per_variant: int) -> dict:
     vf = ValueFactory(seed)
     documents = []
     doc_idx = 0
-    for fmt, variant, ext, builder in _PLAN:
-        for i in range(per_variant):
+    for fmt, variant, ext, builder, copies in _PLAN:
+        for i in range(copies or per_variant):
             rel_file = f"{fmt}/{variant}_{i:03d}.{ext}"
             doc_path = out / rel_file
             doc_path.parent.mkdir(parents=True, exist_ok=True)

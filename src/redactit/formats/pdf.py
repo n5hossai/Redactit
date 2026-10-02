@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import ctypes
 import io
+import re
+from typing import Callable
 
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
@@ -29,8 +31,12 @@ class PdfError(RedactitError, ValueError):
     pass
 
 
-def redact_pdf(data: bytes, engine, scope: str, *, destination: str = "cli") -> tuple[bytes, str]:
-    """(image-only PDF bytes, redacted Markdown of the text visible on each page)."""
+def redact_pdf(data: bytes, engine, scope: str, *, destination: str = "cli", site: str | None = None,
+               progress: Callable[[int, int], None] | None = None) -> tuple[bytes, str]:
+    """(image-only PDF bytes, redacted Markdown of the text visible on each page).
+
+    `progress(page, pages)` runs before each page; an exception from it stops the job.
+    """
     try:
         pdf = pdfium.PdfDocument(data)
     except pdfium.PdfiumError as e:
@@ -39,21 +45,34 @@ def redact_pdf(data: bytes, engine, scope: str, *, destination: str = "cli") -> 
         raise PdfError(f"refusing a PDF with more than {MAX_PAGES} pages")
     out, markdown = pdfium.PdfDocument.new(), []
     for number, page in enumerate(pdf, 1):
+        if progress:
+            progress(number, len(pdf))
         width, height = page.get_size()  # points, after the page's own rotation
         scale = DPI / 72
         if width * height * scale * scale > MAX_PAGE_PIXELS:
             raise PdfError(f"page {number} is too large to render safely")
         image = page.render(scale=scale).to_pil().convert("RGB")
-        layer_boxes = _text_layer(page, image.size, engine, scope, destination)
+        layer_boxes = _text_layer(page, image.size, engine, scope, destination, site)
         pixel_boxes, visible_text = find_boxes(image, engine, scope, covered=layer_boxes, file_type="pdf",
-                                               destination=destination)
+                                               destination=destination, site=site)
         _append_page(out, paint(image, layer_boxes + pixel_boxes), width, height)
         # The Markdown comes from what the page shows, not the text layer: text under a drawn
         # box or in white on white is invisible on the page and must not reappear here.
         markdown.append(f"## Page {number}\n\n{visible_text.strip()}")
     buffer = io.BytesIO()
     out.save(buffer)
-    return buffer.getvalue(), "\n\n".join(markdown) + "\n"
+    return _undated(buffer.getvalue()), "\n\n".join(markdown) + "\n"
+
+
+# PDFium stamps the time of saving. On a redacted copy that is when the user redacted it,
+# which the file does not need to say. The replacement has the same length, so every byte
+# offset in the cross-reference table stays valid.
+_CREATION_DATE = re.compile(rb"/CreationDate\(D:\d{14}")
+_FIXED_DATE = b"/CreationDate(D:19700101000000"
+
+
+def _undated(pdf: bytes) -> bytes:
+    return _CREATION_DATE.sub(_FIXED_DATE, pdf, count=1)
 
 
 def _append_page(doc, image, width: float, height: float) -> None:
@@ -70,7 +89,7 @@ def _append_page(doc, image, width: float, height: float) -> None:
     page.gen_content()
 
 
-def _text_layer(page, size: tuple[int, int], engine, scope: str, destination: str) -> list[Box]:
+def _text_layer(page, size: tuple[int, int], engine, scope: str, destination: str, site: str | None) -> list[Box]:
     """Boxes over sensitive text-layer characters, in rendered-page pixels."""
     textpage = page.get_textpage()
     count = textpage.count_chars()
@@ -80,7 +99,7 @@ def _text_layer(page, size: tuple[int, int], engine, scope: str, destination: st
     # Emoji arrive as surrogate halves, which spaCy cannot encode; U+FFFD keeps the alignment.
     codes = (pdfium_c.FPDFText_GetUnicode(textpage.raw, i) for i in range(count))
     text = "".join("�" if 0xD800 <= c <= 0xDFFF else chr(c or 32) for c in codes)
-    result = engine.redact(text, scope, file_type="pdf", destination=destination)
+    result = engine.redact(text, scope, file_type="pdf", destination=destination, site=site)
     to_pixels = _page_to_pixels(page, size)
     boxes = []
     for decision, replacement in zip(result.decisions, result.replacements):
