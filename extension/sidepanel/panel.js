@@ -8,9 +8,11 @@
  */
 import { initDropzone } from './dropzone.js';
 import { initResult } from './result.js';
+import { initReviews } from './reviews.js';
 import { initStatus } from './status.js';
 import { initTextbox } from './textbox.js';
 
 initDropzone(initResult());
 initTextbox();
-initStatus();
+const reviews = initReviews();
+initStatus({ onReviews: (list, mode) => reviews.update(list, mode) });
