@@ -48,8 +48,22 @@
   let adapterActive = null;
   /** Events we dispatch ourselves: the only untrusted ones our listeners let through. */
   const ours = new WeakSet();
-  /** A drag that started inside this page carries only what the page already shows. */
-  let dragFromPage = false;
+  /**
+   * A drag that started inside this page carries only what the page already shows, so its
+   * drop is left to the page: {data} is what it carried, read once the page's dragstart
+   * listeners had set it (null if they stopped the event). Only a trusted dragstart starts
+   * one. It can outlive its drag (a page that removes the drag's source keeps `dragend`
+   * from ever reaching `window`), and another drag can then arrive from outside, so a drop
+   * is left alone only if it carries exactly that data and no files: no drag that began
+   * in the page can carry the computer's files. It ends at the next drop, dragend or
+   * pointerdown, and after PAGE_DRAG_MS.
+   * @type {{data: string|null}|null}
+   */
+  let pageDrag = null;
+  let pageDragTimer = 0;
+  const PAGE_DRAG_MS = 20_000;
+  /** True only in the task of a page drag's drop, for the editor's insertFromDrop. */
+  let pageDropInserting = false;
   let fileNumber = 0;
 
   /** FileLists Redactit put into a page's input: redacted already, never taken again. */
@@ -62,8 +76,17 @@
   window.addEventListener('beforeinput', onBeforeInput, true);
   window.addEventListener('click', onClick, true);
   window.addEventListener('redactit-pick', onPickRequest, true);
-  window.addEventListener('dragstart', (e) => { if (e.isTrusted) dragFromPage = true; }, true);
-  window.addEventListener('dragend', () => { dragFromPage = false; }, true);
+  window.addEventListener('dragstart', (e) => {
+    if (!e.isTrusted) return;
+    endPageDrag();
+    pageDrag = { data: null };
+    pageDragTimer = setTimeout(endPageDrag, PAGE_DRAG_MS);
+  }, true);
+  window.addEventListener('dragstart', (e) => { // after the page's listeners set the data
+    if (e.isTrusted && pageDrag && e.dataTransfer) pageDrag.data = dragData(e.dataTransfer);
+  });
+  window.addEventListener('dragend', endPageDrag, true);
+  window.addEventListener('pointerdown', (e) => { if (e.isTrusted) endPageDrag(); }, true);
 
   class Blocked extends Error {
     constructor(code, message) {
@@ -89,11 +112,14 @@
 
   function onDrop(e) {
     if (!e.isTrusted || ours.has(e) || !e.dataTransfer) return;
-    if (dragFromPage) {
-      dragFromPage = false;
+    const data = e.dataTransfer;
+    const drag = pageDrag;
+    endPageDrag();
+    if (drag && drag.data !== null && !carriesFiles(data) && dragData(data) === drag.data) {
+      pageDropInserting = true; // the editor inserts it next, in this same task
+      setTimeout(() => { pageDropInserting = false; }, 0);
       return;
     }
-    const data = e.dataTransfer;
     const files = [...data.files];
     const text = files.length ? '' : data.getData('text/plain');
     if (!files.length && !text && !data.types.length) return;
@@ -311,7 +337,7 @@
    * listeners above (it should not happen) is stopped before it is inserted. */
   function onBeforeInput(e) {
     if (!e.isTrusted || !/^insertFrom(Paste|Drop|PasteAsQuotation)$/.test(e.inputType)) return;
-    if (e.inputType === 'insertFromDrop' && dragFromPage) return;
+    if (e.inputType === 'insertFromDrop' && pageDropInserting && !(e.dataTransfer && carriesFiles(e.dataTransfer))) return;
     stop(e);
     notice.show('block', `Redactit blocked this. ${LOCAL_REASONS.unreadable} Nothing was sent to the site.`);
   }
@@ -319,6 +345,21 @@
   function stop(e) {
     e.preventDefault();
     e.stopImmediatePropagation();
+  }
+
+  function endPageDrag() {
+    pageDrag = null;
+    clearTimeout(pageDragTimer);
+  }
+
+  /** Files from the computer: the one thing a drag that began in the page cannot carry. */
+  function carriesFiles(data) {
+    return data.files.length > 0 || [...data.types].includes('Files');
+  }
+
+  /** Every type a drag carries with its data, as one string to compare. */
+  function dragData(data) {
+    return JSON.stringify([...data.types].filter((t) => t !== 'Files').map((t) => [t, data.getData(t)]));
   }
 
   // --- one paste, drop or pick -------------------------------------------------------------
