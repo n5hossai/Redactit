@@ -242,6 +242,30 @@ class Browser:
         return self.worker.evaluate(expression)
 
 
+class Setup:
+    """A browser plus, optionally, a registered host; everything torn down in reverse."""
+
+    def __init__(self, playwright, tmp: Path, *, host: str | None, **build):
+        tmp.mkdir(parents=True, exist_ok=True)
+        name = unique_host_name()
+        profile = tmp / "profile"
+        self.browser = None
+        self.registration = Registration(tmp, profile, name, host) if host else None
+        try:
+            self.browser = Browser(playwright, profile, build_extension(tmp / "extension", name, **build))
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        try:
+            if self.browser:
+                self.browser.close()
+        finally:
+            if self.registration:
+                self.registration.close()
+
+
 def notice_text(context, page) -> str:
     """The text of Redactit's in-page notice, read through DevTools, which can see into a
     closed shadow root; the page itself cannot."""
