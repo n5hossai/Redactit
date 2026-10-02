@@ -261,10 +261,14 @@
       <span class="meta review-expiry"></span>
     </div>
     <p class="review-reason"></p>
-    <textarea class="out review-text" rows="4" readonly aria-label="Redacted text waiting for review"></textarea>
-    <p class="help review-notext" hidden></p>
+    <div class="preview">
+      <textarea class="out preview-text" rows="4" readonly aria-label="Redacted text waiting for review" hidden></textarea>
+      <img class="preview-image" alt="The redacted image waiting for review" hidden>
+      <a class="btn preview-file" target="_blank" rel="noopener" hidden><span>Open the redacted PDF</span></a>
+      <p class="help preview-note" hidden></p>
+    </div>
     <div class="row">
-      <button type="button" class="btn primary review-approve"><span>Approve</span></button>
+      <button type="button" class="btn primary review-approve" disabled><span>Approve</span></button>
       <button type="button" class="btn review-cancel"><span>Cancel</span></button>
     </div>
   </li>

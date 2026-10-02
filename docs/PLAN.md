@@ -414,7 +414,11 @@ are committed.
     `keepReady`; the review mode is shown read-only, `Not known yet` until the host's
     policy loads, an unknown mode as off.
   - Review queue: each held item with what and where it is, why it is held
-    (`always` or `low_confidence`), the time left and its redacted text; Approve or Cancel.
+    (`always` or `low_confidence`), the time left and its redacted content, the very
+    bytes Approve hands over (`redactit/review-get`, extension pages only): text as text,
+    an image as the image, a PDF as the PDF itself, opened from the panel in the
+    browser's viewer, beside its page text. Approve is enabled only once all of it is
+    shown; a file too large for one message (48 MiB) cannot be approved. Approve or Cancel.
   - Re-mapping (`redactit/remap`): a pasted reply is shown with real values, as text in
     the panel's DOM only. Never stored, never sent to a tab, never copied by itself:
     copying takes its own click beside a warning that the text holds real data, and the

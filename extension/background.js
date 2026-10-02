@@ -67,7 +67,10 @@
  *       The file part goes (a PDF or image), never a PDF's Markdown; a text or Word
  *       file's one text part is the file. At most about 48 MiB (a message's limit).
  *   redactit/review-list          -> [Review]. Extension pages only.
- *   redactit/review-get {job}      -> Review & {text?}: the redacted text part, if any.
+ *   redactit/review-get {job}      -> Review & {text?, file?, fileType?, fileTooLarge?}:
+ *       extension pages only. The redacted text part, and the file part (a PDF or image)
+ *       as base64: the bytes Approve hands over, for the panel to show. A file part above
+ *       MAX_MESSAGE_FILE is not sent (fileTooLarge), and the panel cannot approve it.
  *   redactit/review-decide {job, approve}  -> {ok}. approve=true hands the result to the
  *       page; false blocks it. Extension pages only, so a page cannot approve itself.
  *   redactit/page {adapter, active}     content scripts only: reports the site adapter's
@@ -126,6 +129,9 @@ const HOST_STATES = ['warming', 'ready-text', 'ready-all', 'unavailable'];
 /** The policy's review mode as the host reports it ('off' is reserved: no policy sets it yet). */
 const REVIEW_MODES = ['always', 'low_confidence', 'off'];
 const MAX_PANEL_TEXT = 8 * 1024 * 1024;
+/** The largest file one message can carry: a message holds 64 MiB of JSON, and base64
+ * makes 48 MiB of bytes 64 MiB of text. A test build may rewrite this line. */
+const MAX_MESSAGE_FILE = 48 * 1024 * 1024;
 const FRAMING_FAULTS = new Set(['bad_frame', 'message_too_large', 'bad_json', 'bad_message', 'bad_sequence',
   'unknown_request', 'duplicate_request']);
 
@@ -836,17 +842,25 @@ function reviewList() {
   return [...jobs.values()].filter((j) => j.review).map(reviewOf);
 }
 
-/** The redacted text part of a held result, for the panel to show. */
-function reviewText(job) {
+/**
+ * A held result as the reviewer must see it: its text part, and its file part (a PDF or
+ * an image), the very bytes Approve hands to the page, as base64 with its type. Only for
+ * extension pages (redactit/review-get is panel-only): a page must not read what waits
+ * for review. A file part too large for one message is marked, not sent, and the panel
+ * then cannot approve it.
+ */
+function reviewContent(job) {
+  const bytes = fromB64Chunks(job.chunks, job.result.size);
+  const out = {};
   let at = 0;
   for (const part of job.result.parts) {
-    if (part.name === 'text') {
-      const bytes = fromB64Chunks(job.chunks, job.result.size);
-      return new TextDecoder('utf-8').decode(bytes.subarray(at, at + part.size));
-    }
+    const slice = bytes.subarray(at, at + part.size);
     at += part.size;
+    if (part.name === 'text') out.text = new TextDecoder('utf-8').decode(slice);
+    else if (part.name === 'file' && part.size <= MAX_MESSAGE_FILE) Object.assign(out, { file: toB64(slice), fileType: part.media_type });
+    else if (part.name === 'file') out.fileTooLarge = true;
   }
-  return undefined;
+  return out;
 }
 
 function decideReview(id, approve) {
@@ -1126,7 +1140,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     'redactit/review-list': () => reviewList(),
     'redactit/review-get': () => {
       const job = jobs.get(msg.job);
-      return job && job.review ? { ...reviewOf(job), text: reviewText(job) } : null;
+      return job && job.review ? { ...reviewOf(job), ...reviewContent(job) } : null;
     },
     'redactit/review-decide': () => ({ ok: decideReview(msg.job, msg.approve === true) }),
     'redactit/attach': () => attachToChat(msg),
