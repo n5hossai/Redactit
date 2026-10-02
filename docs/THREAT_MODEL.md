@@ -9,7 +9,8 @@ Update this file in the same PR as any change that moves a boundary.
 | Asset | Where it lives | Why it matters |
 |---|---|---|
 | Original content (text, files, clipboard) | User's machine (including the watcher's inbox), engine memory | The thing we exist to keep away from LLM providers |
-| Redacted copies | The watcher's outbox and its private staging folder; the clipboard after `redactit clip` | Pseudonymised, but file names and context stay; how long the outbox keeps them is undecided (PLAN §12) |
+| Redacted copies | The watcher's outbox and its private staging folder; the clipboard after `redactit clip` | Pseudonymised, but file names and context stay; the watcher deletes its outbox copies after the vault's retention period, 30 days by default (PLAN §2.1) |
+| Index of redacted copies | `copies.json` in the user data folder | Names each kept copy's path, and so its file name; decides what the retention purge may delete |
 | Pseudonym mappings (`[PERSON_1]` to real value) | Encrypted vault on disk | Reverses the redaction for anyone who reads it |
 | Vault key | OS keychain | Decrypts the vault |
 | Policy (managed + user) | `policy.yaml` files | Weakening it silently lets data through |
@@ -75,7 +76,7 @@ flowchart LR
 | T8 | Another extension or process drives the native host | B2 | `allowed_origins` with one fixed ID; host also checks the origin argument Chrome passes against the installed manifest | `tests/test_host.py`: a wrong origin and the unfilled template are refused before the engine loads; `tests/unit/test_native.py`: the manifest must allow exactly one well-formed ID. Registration itself: installer test (Phase 7) |
 | T9 | Oversized or malformed native messages crash the host or truncate data | B2 | Length-prefixed frames, 512 KiB chunks with checked sequence numbers and totals, strict JSON schema, caps per message, payload and in-flight requests | `tests/unit/test_native.py` (schema, reassembly); `tests/test_host.py` (bad length, bad JSON, oversized message, wrong sequence number, unknown type, caps; a multi-MB PDF and image byte-identical to the engine's output) |
 | T10 | Raw values end up in logs, exceptions or the audit file | B3 | Audit stores types, counts, rule IDs and scores only; logging filter; sanitised exception type; the native host's errors are fixed text and library output on its stderr is withheld | Leak test scans logs and audit file (Phase 2); `tests/test_host.py` checks the host's errors, stderr and audit file |
-| T11 | Temp files are left behind or readable by others | B3 | Memory by default; formats and the native host write no temp files. The folder watcher stages each output in a `mkdtemp` folder inside the outbox (0700; on Windows a protected owner-only ACL, Python 3.12.4 or later) and renames it into place. Each write deletes its temp file in `finally`, the folder is removed in `finally`, and SIGTERM and Ctrl+Break are turned into Ctrl+C so every stop path runs that cleanup | `tests/unit/test_watcher.py`: the folder is private (mode or `icacls`) and empty after every file, after a failed rename and after Ctrl+C in the middle of a write; `tests/test_watch.py`: none left after a round trip, or after `redactit watch` is stopped from the keyboard |
+| T11 | Temp files are left behind or readable by others | B3 | Memory by default; formats and the native host write no temp files. The folder watcher stages each output in a `mkdtemp` folder inside the outbox (0700; on Windows a protected owner-only ACL, Python 3.12.4 or later) and renames it into place. Each write deletes its temp file in `finally`, the folder is removed in `finally`, and SIGTERM and Ctrl+Break are turned into Ctrl+C so every stop path runs that cleanup. The index of redacted copies is written to a temp file beside it in the data folder (0600 on POSIX; on Windows the folder's ACL, user-only under the profile), renamed into place, and the temp file is deleted in `finally` | `tests/unit/test_watcher.py`: the folder is private (mode or `icacls`) and empty after every file, after a failed rename and after Ctrl+C in the middle of a write; `tests/test_watch.py`: none left after a round trip, or after `redactit watch` is stopped from the keyboard |
 | T12 | Vault read from disk | B3 | AES-256-GCM, key in OS keychain, 30-day purge | Vault unit tests (Phase 2) |
 | T13 | User weakens the policy | Engine | Managed layer, tighten-only merge, locked types | Policy merge tests (Phase 2) |
 | T14 | Engine phones home or downloads at runtime | B4 | Only `setup-models` has network code; `safety.block_network()` refuses IP sockets and DNS in the engine process; sockets disabled in tests | `tests/test_offline.py` |
@@ -83,6 +84,7 @@ flowchart LR
 | T16 | Clipboard captures a password-manager secret | Engine | Items marked concealed are skipped before their text is read (markers per OS in PLAN §2.1), and the engine is never loaded for them; on macOS and Linux, where the check and the read are separate calls, text is refused if the clipboard changed or became concealed in between; redaction only on a keypress, no monitoring | `tests/unit/test_clipboard.py`: Windows, macOS and Linux markers with the OS calls replaced, and a change between check and read; `tests/test_clip.py`: a concealed item on the real Windows clipboard is left unchanged (skipped where no clipboard can be opened) |
 | T17 | Copyleft dependency creeps in | Supply chain | License test fails on anything outside MIT/Apache/BSD unless flagged | `tests/test_licenses.py` |
 | T18 | Remote code in the extension | Supply chain | MV3 CSP, no `eval`, no remote scripts, no build step | Manifest review; CSP in `manifest.json` |
+| T19 | The retention purge deletes a file Redactit did not write, or deletes through a link | B3 | Only files in Redactit's own index (`copies.json` in the data folder, never the outbox) are candidates. One is deleted only if it is older than the policy's `vault.retention_days` (30 by default), still has its recorded file ID, size and mtime, is a regular file and not a link or a reparse point naming another path (the watcher's link rule), and is not in the current inbox. Anything else is dropped from the index and left alone, so the user's own files in an `--outbox` folder and copies they edited or replaced are never deleted. The index is replaced by an atomic rename; one that cannot be read or does not parse exactly deletes nothing. The `copies_purge` audit event carries counts only | `tests/unit/test_copies.py`: an expired copy deleted and a newer one kept; the user's own file, an edited copy and a replaced copy kept; a symlink, and a stood-in reparse point with a matching fingerprint, kept with what they name; the inbox untouched; a corrupt, half-written or unreadable index and a failed save delete nothing; the audit event's fields. `tests/unit/test_watcher.py`: every output recorded; purges at start-up and while running; an earlier outbox watched as the inbox untouched; a 7-day policy deletes an 8-day-old copy through `redactit watch` |
 
 ## 5. Residual risks
 
@@ -99,10 +101,22 @@ flowchart LR
   clipboard history (Win+V), cloud clipboard sync and third-party clipboard managers keep
   the original copy.
 - **Watcher file names.** Outputs keep their input's name, and a name can itself be
-  sensitive. Log lines leave names out; the outbox cannot.
+  sensitive. Log lines and the audit file leave names out; the outbox cannot, and the
+  index of copies in the data folder holds each copy's path until the copy is deleted.
 - **Hard stop of the watcher.** A power cut or a forced kill skips `finally` and can leave
   the private staging folder in the outbox, holding at most one partial output. That
-  output is already redacted; original content is never written there.
+  output is already redacted; original content is never written there. A kill while the
+  index of copies is saved can leave a temp file beside it in the data folder; the index
+  itself is the old one or the new one, never part of either.
+- **Purge checks, then deletes.** The checks and the delete are separate calls, so a file
+  put in place of an expired copy in the instant between them would be deleted. Deleting
+  a link removes the link, never what it names. Only a process running as the user can
+  make such a swap (§3).
+- **Copies that are not deleted.** Retention runs only while the watcher runs, so copies
+  of a watcher never started again stay. A copy whose record was lost is kept for good:
+  the index could not be written when it was made, two watchers saved the index at once,
+  or the index was found corrupt and started again. Each fails towards keeping a copy,
+  never deleting a file; the user removes such copies by hand.
 - **Watcher restart on Windows.** At start-up, a file counts as done when its outputs are
   newer than its times. A file moved in from the same drive, or copied over an input of
   the same name, while the watcher was stopped can keep older times. It is then not
