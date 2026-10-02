@@ -103,7 +103,7 @@ export function initStatus(hooks = {}) {
     port.onDisconnect.addListener(() => setTimeout(connect, 500));
   }
 
-  let targetId = null;
+  let targetKey = null; // the tab and its chat: either changing is a new target
   async function showTarget() {
     const target = await findTarget();
     const line = $('target');
@@ -114,9 +114,9 @@ export function initStatus(hooks = {}) {
     } else {
       line.textContent = 'Open claude.ai, chatgpt.com or gemini.google.com in this window to use Redactit here.';
     }
-    const id = target ? target.id : null;
-    if (id !== targetId) {
-      targetId = id;
+    const key = target ? `${target.id} ${target.chat}` : null;
+    if (key !== targetKey) {
+      targetKey = key;
       hooks.onTarget?.(target);
     }
   }

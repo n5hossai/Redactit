@@ -26,8 +26,9 @@ export function siteOf(url) {
  * scope, so the panel must name it (`tabId` in the worker's API). In the side panel that
  * is the active tab of the panel's window, so what is redacted always matches the chat
  * in view. When this page is open in a tab of its own, the active tab is the page
- * itself, so the chat tab used most recently is taken instead.
- * @returns {Promise<{id: number, site: string}|null>}
+ * itself, so the chat tab used most recently is taken instead. `chat` is the page's
+ * origin and path: a tab that moves to another chat is another target.
+ * @returns {Promise<{id: number, site: string, chat: string}|null>}
  */
 export async function findTarget() {
   let self = null;
@@ -37,15 +38,18 @@ export async function findTarget() {
     self = null;
   }
   try {
+    let tab;
     if (!self) {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const site = tab && siteOf(tab.url);
-      return site ? { id: tab.id, site } : null;
+      [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    } else {
+      const tabs = await chrome.tabs.query({ url: SITE_PATTERNS });
+      tabs.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
+      tab = tabs.find((t) => siteOf(t.url));
     }
-    const tabs = await chrome.tabs.query({ url: SITE_PATTERNS });
-    tabs.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
-    const tab = tabs.find((t) => siteOf(t.url));
-    return tab ? { id: tab.id, site: siteOf(tab.url) } : null;
+    const site = tab && siteOf(tab.url);
+    if (!site) return null;
+    const url = new URL(tab.url);
+    return { id: tab.id, site, chat: url.origin + url.pathname };
   } catch {
     return null;
   }

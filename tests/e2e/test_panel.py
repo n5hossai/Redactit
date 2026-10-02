@@ -391,6 +391,25 @@ def test_remapping_is_not_available_when_refused_and_real_values_stay_in_the_pan
     assert panel.is_hidden("#remapResult") and panel.inner_text("#remapOut") == ""
 
 
+def test_real_values_are_cleared_when_the_tab_moves_to_another_chat(setup):
+    """Real values belong to the chat they were mapped for; the same tab showing another
+    chat clears them, as another tab would."""
+    s = setup()
+    stub(s)
+    b = s.browser
+    chat = b.open("https://claude.ai/chat/first-chat-0001")
+    panel = b.panel()
+    panel.click("#remapSection summary")
+    panel.fill("#remapIn", "I will write to [PERSON_1] today.")
+    panel.click("#remapBtn")
+    wait_for(lambda: panel.is_visible("#remapResult"))
+    assert NAME in panel.inner_text("#remapOut")
+    chat.goto("https://claude.ai/chat/second-chat-0002")
+    wait_for(lambda: panel.is_hidden("#remapResult"))
+    assert panel.inner_text("#remapOut") == ""
+    assert "chat in view changed" in panel.inner_text("#remapStatus")
+
+
 def test_the_panel_fits_side_panel_widths_and_works_from_the_keyboard(setup):
     s = setup()
     _, panel = open_panel(s)
