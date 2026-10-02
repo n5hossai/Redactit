@@ -6,7 +6,7 @@
  * hands back only what the host redacted. It FAILS CLOSED (THREAT_MODEL T7): a missing,
  * stopped, silent or confused host, or an engine error, ends the request with `blocked`,
  * and nothing unredacted is ever handed back. It logs nothing and stores no content:
- * chrome.storage holds two settings and the chat-scope aliases (URL paths), never input.
+ * chrome.storage holds one setting and the chat-scope aliases (URL paths), never input.
  *
  * ## Message API (content scripts and the side panel)
  *
@@ -28,7 +28,7 @@
  *   {op: 'accepted', job}             job: the id that redactit/cancel and reviews use
  *   {op: 'held', state}               the host is starting; the request waits (30 s at most)
  *   {op: 'progress', stage, page?, pages?}   from the host: 'queued', 'redacting', PDF pages
- *   {op: 'review'}                    held for review in the side panel (review mode)
+ *   {op: 'review'}                    held for review in the side panel (pages only; see Review)
  *   {op: 'result', size, total, parts}       parts: [{name: 'file'|'text', media_type, size}],
  *                                     concatenated in that order into `size` bytes
  *   {op: 'chunk', seq, total, data}   the result, framed like the request
@@ -48,7 +48,7 @@
  *   redactit/redact-text {text, tabId}  -> {ok: true, text} | {ok: false, code, message}.
  *       Extension pages only; for "Redact & copy". At most 8 MiB of UTF-8; use a job port
  *       beyond that. Never held for review: the panel is the reviewer.
- *   redactit/review-list           -> [Review]. Extension pages only.
+ *   redactit/review-list          -> [Review]. Extension pages only.
  *   redactit/review-get {job}      -> Review & {text?}: the redacted text part, if any.
  *   redactit/review-decide {job, approve}  -> {ok}. approve=true hands the result to the
  *       page; false blocks it. Extension pages only, so a page cannot approve itself.
@@ -56,9 +56,14 @@
  *       self-check (active: null while checking) and starts the host when keepReady is on.
  *
  *   Status: {state: 'down'|'starting'|'warming'|'ready-text'|'ready-all'|'unavailable',
- *            version, error: {code, message} | null, jobs, reviews, settings,
- *            adapter?: {name, active} for tabId, recent: [{kind, site, held, code}]}
- *   Review: {job, site, kind, parts, createdAt, expiresAt}
+ *            version, error: {code, message} | null, jobs, reviews, settings: {keepReady},
+ *            reviewMode: 'always'|'low_confidence'|'off'|null (the host's policy; null
+ *            until the host has loaded it), adapter?: {name, active} for tabId,
+ *            recent: [{kind, site, held, code}]}
+ *   Review: {job, site, kind, parts, createdAt, expiresAt, reason: 'always'|'low_confidence'}
+ *       A page's result is held for review when the host's policy says so: always, or
+ *       with low_confidence when the engine marked any decision for review. Never with
+ *       'off'. A result requested by an extension page is never held.
  *
  * ### Events for the side panel: `chrome.runtime.connect({name: 'redactit/events'})`
  *
@@ -69,11 +74,11 @@
  *
  *   keepReady: boolean (default false): "Keep Redactit ready" starts the host when an AI
  *              site loads, not on the first paste (speed plan decision 1).
- *   reviewMode: 'off' | 'always' (default 'off'): hold every page result for review.
+ *   Review mode is not a setting: it is the policy the host loaded (policy.review.mode).
  */
 'use strict';
 
-// Settings a test build may rewrite: tests/e2e/build.py replaces these exact lines in its copy.
+// Settings a test build may rewrite: tests/e2e/browserkit.py replaces these exact lines in its copy.
 const HOST_NAME = 'com.redactit.host';
 const WARM_HOLD_MS = 30_000;
 
@@ -88,7 +93,7 @@ const RECONNECT_MS = [1_000, 2_000, 5_000, 15_000, 60_000];
 const IDLE_EXIT_MS = 25 * 60_000;
 
 // The host's protocol (src/redactit/hosts/native.py). These must match it exactly.
-const PROTOCOL = 1;
+const PROTOCOL = 2; // 2: results carry a review count, and status the policy's review mode
 const CHUNK = 512 * 1024; // base64 characters per chunk
 const RAW_CHUNK = (CHUNK / 4) * 3; // the payload bytes they carry (384 KiB)
 const MAX_PAYLOAD = 64 * 1024 * 1024;
@@ -96,6 +101,8 @@ const MAX_JOBS = 16; // the host's MAX_IN_FLIGHT: one more would be refused as b
 const KINDS = ['txt', 'md', 'docx', 'pdf', 'image'];
 const NEEDS_IMAGES = new Set(['pdf', 'image']); // these wait for OCR, as at the host
 const HOST_STATES = ['warming', 'ready-text', 'ready-all', 'unavailable'];
+/** The policy's review mode as the host reports it ('off' is reserved: no policy sets it yet). */
+const REVIEW_MODES = ['always', 'low_confidence', 'off'];
 const MAX_PANEL_TEXT = 8 * 1024 * 1024;
 const FRAMING_FAULTS = new Set(['bad_frame', 'message_too_large', 'bad_json', 'bad_message', 'bad_sequence',
   'unknown_request', 'duplicate_request']);
@@ -127,7 +134,7 @@ const REASONS = {
   host_exited: "Redactit's app stopped unexpectedly.",
   host_down: "Redactit's app is not running.",
   host_timeout: "Redactit's app stopped responding.",
-  host_incompatible: "Redactit's app and this extension are different versions.",
+  host_incompatible: "Redactit's app and this extension are different versions. Update both to the same release.",
   protocol: "Redactit's app sent something the extension could not check.",
   warming_timeout: `Redactit's app took more than ${Math.round(WARM_HOLD_MS / 1000)} seconds to start. Try again.`,
   engine_unavailable: "Redactit's redaction engine could not start.",
@@ -148,24 +155,23 @@ const REASONS = {
 
 // --- settings ----------------------------------------------------------------------------
 
-const DEFAULT_SETTINGS = Object.freeze({ keepReady: false, reviewMode: 'off' });
-/** @type {{keepReady: boolean, reviewMode: 'off'|'always'}} */
+const DEFAULT_SETTINGS = Object.freeze({ keepReady: false });
+/** @type {{keepReady: boolean}} */
 let settings = { ...DEFAULT_SETTINGS };
 
+/** Review mode is deliberately not a setting: it follows the policy the host loaded, so a
+ * user cannot switch review off here when the admin's policy asks for it. */
 function readSettings(raw) {
-  return {
-    keepReady: raw.keepReady === true,
-    reviewMode: raw.reviewMode === 'always' ? 'always' : 'off',
-  };
+  return { keepReady: raw.keepReady === true };
 }
 
-/** Loaded before any job starts, so a woken worker never skips a review it should hold. */
+/** Loaded before any job starts, so a woken worker knows whether to start the host early. */
 const settingsLoaded = chrome.storage.local.get(DEFAULT_SETTINGS)
   .then((raw) => { settings = readSettings(raw); })
   .catch(() => {});
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local' || !(changes.keepReady || changes.reviewMode)) return;
+  if (area !== 'local' || !changes.keepReady) return;
   chrome.storage.local.get(DEFAULT_SETTINGS).then((raw) => {
     settings = readSettings(raw);
     broadcastStatus();
@@ -183,6 +189,7 @@ const host = {
   /** @type {chrome.runtime.Port|null} */ port: null,
   state: 'down',
   version: null,
+  /** @type {'always'|'low_confidence'|'off'|null} */ reviewMode: null, // from the host's policy
   /** @type {{code: string, message: string}|null} */ error: null,
   engineMessage: null, // the host's explanation when the engine could not start
   imagesFailed: false, // OCR could not start: PDFs and images are answered with an error
@@ -207,7 +214,7 @@ function startHost() {
     return;
   }
   Object.assign(host, {
-    port, state: 'starting', version: null, error: null, engineMessage: null,
+    port, state: 'starting', version: null, reviewMode: null, error: null, engineMessage: null,
     imagesFailed: false, pendingCode: null, lastFrameAt: Date.now(), lastWorkAt: Date.now(),
   });
   port.onMessage.addListener((msg) => {
@@ -294,10 +301,10 @@ const isB64 = (v) => typeof v === 'string' && v.length <= CHUNK && v.length % 4 
  * refuses ours: a frame we cannot fully account for is not acted on. */
 const FROM_HOST = {
   status: { id: (v) => v === null || isId(v), state: (v) => HOST_STATES.includes(v),
-    version: isText(64), protocol: isCount(0) },
+    version: isText(64), protocol: isCount(0), review_mode: (v) => v === null || REVIEW_MODES.includes(v) },
   progress: { id: isId, stage: (v) => typeof v === 'string' && /^[a-z_-]{1,32}$/.test(v),
     page: isCount(1), pages: isCount(1) },
-  result: { id: isId, size: isCount(0), total: isCount(1), parts: isParts },
+  result: { id: isId, size: isCount(0), total: isCount(1), parts: isParts, review: isReview },
   chunk: { id: isId, seq: isCount(0), total: isCount(1), data: isB64 },
   error: { id: (v) => v === null || isId(v), code: (v) => typeof v === 'string' && /^[a-z_]{1,40}$/.test(v),
     message: isText(1000) },
@@ -309,6 +316,12 @@ function isParts(v) {
     p && typeof p === 'object' && !Array.isArray(p)
     && sameKeys(p, ['name', 'media_type', 'size'])
     && isText(32)(p.name) && isText(64)(p.media_type) && isCount(0)(p.size));
+}
+
+/** {needed, count}: counts only, and `needed` must agree with the count. */
+function isReview(v) {
+  return Boolean(v) && typeof v === 'object' && !Array.isArray(v) && sameKeys(v, ['needed', 'count'])
+    && typeof v.needed === 'boolean' && isCount(0)(v.count) && v.needed === v.count > 0;
 }
 
 function sameKeys(obj, keys) {
@@ -331,6 +344,11 @@ function validHostMessage(msg) {
 
 function onHostMessage(msg) {
   host.lastFrameAt = Date.now();
+  // A host on another protocol version is told apart before its frames are checked
+  // against ours: its status would fail that check, and the user would only see 'protocol'.
+  if (msg && msg.type === 'status' && Number.isInteger(msg.protocol) && msg.protocol !== PROTOCOL) {
+    return dropHost('host_incompatible');
+  }
   if (!validHostMessage(msg)) return dropHost('protocol');
   if (msg.type === 'status') return onStatus(msg);
   if (msg.type === 'error' && msg.id === null) return onHostWideError(msg);
@@ -361,9 +379,10 @@ function onStatus(msg) {
     resolve?.(msg.state);
     if (!resolve && !closedIds.has(msg.id)) return dropHost('protocol'); // a late answer is fine
   }
-  const before = host.state;
+  const before = [host.state, host.reviewMode];
   host.state = msg.state;
   host.version = msg.version;
+  host.reviewMode = msg.review_mode;
   if (msg.state === 'unavailable') {
     host.error = { code: 'engine_unavailable', message: reasonFor('engine_unavailable', host.engineMessage) };
     for (const job of [...jobs.values()]) cancelJob(job, 'engine_unavailable', host.engineMessage);
@@ -372,7 +391,7 @@ function onStatus(msg) {
     host.error = null;
     for (const job of jobs.values()) if (job.held && readyFor(job.kind)) release(job);
   }
-  if (before !== host.state) broadcastStatus();
+  if (before[0] !== host.state || before[1] !== host.reviewMode) broadcastStatus();
   return undefined;
 }
 
@@ -434,8 +453,9 @@ function pingHost() {
  * @property {boolean} everHeld
  * @property {boolean} hostDone    the host has answered in full (result or error)
  * @property {boolean} review
+ * @property {'always'|'low_confidence'|null} reviewReason
  * @property {number} activeAt     last sign of life from either side
- * @property {{size: number, total: number, parts: object[]}|null} result
+ * @property {{size: number, total: number, parts: object[], review: {needed: boolean, count: number}}|null} result
  * @property {string[]} chunks     the result's base64 chunks, checked as they arrive
  * @property {number} received     result bytes so far
  * @property {number} createdAt
@@ -484,7 +504,7 @@ function createJob(client, msg, place, fromPage) {
   const job = {
     id: newId('j'), kind: msg.kind, size: msg.size, total: msg.total, site: place.site,
     scope: place.scope, tabId: place.tabId, client, fromPage, uploaded: 0, held: false,
-    everHeld: false, hostDone: false, review: false, activeAt: now, result: null, chunks: [],
+    everHeld: false, hostDone: false, review: false, reviewReason: null, activeAt: now, result: null, chunks: [],
     received: 0, createdAt: now, timer: null,
   };
   jobs.set(job.id, job);
@@ -561,7 +581,7 @@ function onResult(job, msg) {
     return cancelJob(job, 'protocol');
   }
   job.activeAt = Date.now();
-  job.result = { size: msg.size, total: msg.total, parts: msg.parts };
+  job.result = { size: msg.size, total: msg.total, parts: msg.parts, review: msg.review };
   return undefined;
 }
 
@@ -579,8 +599,22 @@ function onResultChunk(job, msg) {
   job.received += expected;
   if (job.chunks.length < r.total) return undefined;
   job.hostDone = true;
-  if (job.fromPage && settings.reviewMode === 'always') return startReview(job);
+  const reason = job.fromPage ? reviewReason(job.result.review) : null;
+  if (reason) return startReview(job, reason);
   return deliver(job);
+}
+
+/**
+ * Why a page's result must wait for review, or null. Follows the policy the host loaded:
+ * 'always' holds everything; 'low_confidence' holds a result in which the engine marked
+ * any decision for review; 'off' holds nothing. A host that has not said (null) is
+ * treated as 'always': holding is the side that cannot leak.
+ */
+function reviewReason(review) {
+  const mode = host.reviewMode;
+  if (mode === 'off') return null;
+  if (mode === 'low_confidence') return review.needed ? 'low_confidence' : null;
+  return 'always';
 }
 
 function deliver(job) {
@@ -682,8 +716,9 @@ function ensureTicker() {
 
 // --- review ------------------------------------------------------------------------------
 
-function startReview(job) {
+function startReview(job, reason) {
   job.review = true;
+  job.reviewReason = reason;
   job.timer = setTimeout(() => finish(job, 'review_timeout'), REVIEW_TIMEOUT_MS);
   post(job, { op: 'review' });
   broadcastReviews();
@@ -691,7 +726,7 @@ function startReview(job) {
 
 function reviewOf(job) {
   return { job: job.id, site: job.site, kind: job.kind, parts: job.result.parts, createdAt: job.createdAt,
-    expiresAt: job.createdAt + REVIEW_TIMEOUT_MS };
+    expiresAt: job.createdAt + REVIEW_TIMEOUT_MS, reason: job.reviewReason };
 }
 
 function reviewList() {
@@ -890,7 +925,7 @@ const pageAdapters = new Map();
 function statusOf(tabId) {
   const status = {
     state: host.state, version: host.version, error: host.error, jobs: jobs.size,
-    reviews: reviewList().length, settings: { ...settings }, recent: recent.slice(),
+    reviews: reviewList().length, settings: { ...settings }, reviewMode: host.reviewMode, recent: recent.slice(),
   };
   if (Number.isInteger(tabId) && pageAdapters.has(tabId)) status.adapter = pageAdapters.get(tabId);
   return status;
@@ -946,6 +981,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 
 /** "Redact & copy" from the side panel: the same job path, with an in-memory client. */
 async function redactForPanel(msg) {
+  const kind = 'text';
   const fail = (code) => ({ ok: false, code, message: reasonFor(code) });
   if (typeof msg.text !== 'string') return fail('extension_error');
   const bytes = new TextEncoder().encode(msg.text);
@@ -972,7 +1008,7 @@ async function redactForPanel(msg) {
       disconnect() {},
     };
     const total = chunkCount(bytes.length);
-    const job = createJob(client, { op: 'start', kind: 'text', size: bytes.length, total }, place, false);
+    const job = createJob(client, { op: 'start', kind, size: bytes.length, total }, place, false);
     if (!job) return;
     for (let seq = 0; seq < total && jobs.get(job.id) === job; seq += 1) {
       const data = toB64(bytes.subarray(seq * RAW_CHUNK, (seq + 1) * RAW_CHUNK));

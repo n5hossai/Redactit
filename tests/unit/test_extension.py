@@ -93,6 +93,8 @@ def test_the_worker_speaks_the_hosts_protocol():
     assert "const NEEDS_IMAGES = new Set(['pdf', 'image']);" in bg and native._NEEDS_IMAGES == {"pdf", "image"}
     intercept = (EXT / "content" / "intercept.js").read_text(encoding="utf-8")
     assert native.RAW_CHUNK == 384 * 1024 and "const RAW_CHUNK = 384 * 1024;" in intercept
+    modes = re.search(r"const REVIEW_MODES = \[(.*?)\];", bg).group(1)
+    assert set(native.REVIEW_MODES.values()) <= set(re.findall(r"'(\w+)'", modes))
 
 
 def test_every_code_the_host_can_send_has_a_message_for_the_user():

@@ -128,6 +128,13 @@ def test_warming_then_ready_and_an_early_request_waits(host, engine):
 def test_ping_reports_the_state_and_protocol(host):
     status = host.ping("p1")
     assert (status["type"], status["state"], status["protocol"]) == ("status", "ready-all", native.PROTOCOL)
+    assert status["review_mode"] == native.REVIEW_MODES[effective_policy().review.mode]
+
+
+def test_a_result_reports_how_many_decisions_need_review(host, engine):
+    host.request("rv", "text", PASTE.encode("utf-8"), scope="review")
+    expected = sum(d.needs_review for d in engine.redact(PASTE, "review").decisions)
+    assert host.outcome("rv")["result"]["review"] == {"needed": expected > 0, "count": expected}
 
 
 # --- round trips ------------------------------------------------------------------------

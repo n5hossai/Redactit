@@ -365,10 +365,15 @@ are committed.
 - Review UX: `chrome.sidePanel.open()` only works synchronously inside a user gesture in
   extension code (Chrome 116+). When a paste needs review, the send is held and an
   in-page notice asks the user to click the Redactit toolbar button, which opens the panel
-  with the pending review. For now review is an extension setting (`reviewMode`:
-  `always` or `off`); the host's results do not yet say when a span was low-confidence
-  (§12). Only extension pages can read or decide a review, so a site cannot approve its
-  own paste; a review not decided in 10 minutes blocks.
+  with the pending review. The review mode is the policy's (`review.mode`), which the
+  host reports in its status (protocol 2: `always` or `low_confidence`); it is not an
+  extension setting, so a user cannot switch off a review the admin asked for. Every
+  result carries `review: {needed, count}`, the number of the engine's decisions marked
+  for review, counts only. A page's result is held when the mode is `always`, or
+  `low_confidence` with `needed`; never when it is `off`; and, until the host has said,
+  as if `always`. Only extension pages can read or decide a review, so a site cannot
+  approve its own paste; a review not decided in 10 minutes blocks. The worker refuses a
+  host on another protocol version (`host_incompatible`).
 - In-page notices live in a closed shadow root: the site can tell that one exists, but
   cannot read it. They show status and reasons only, never content.
 - Adapters (`content/adapters/claude.js`, `chatgpt.js`, `gemini.js`): one file per site,
