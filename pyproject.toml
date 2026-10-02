@@ -32,6 +32,8 @@ redactit = "redactit.cli:main"
 
 [dependency-groups]
 dev = ["pytest==9.1.1", "pytest-socket==0.8.1"]
+# Drives a real Chromium with the unpacked extension for the browser tests. Never shipped.
+e2e = ["playwright==1.63.0"]
 # Builds the synthetic corpus and re-extracts outputs for the leak test. Never shipped.
 leak = ["Faker==40.39.0", "reportlab==5.0.1"]
 

@@ -232,7 +232,7 @@ Redactit/
 │  ├─ background.js          # native port, chunk reassembly, fail-closed
 │  ├─ content/
 │  │  ├─ intercept.js        # paste, drop, file input (shared)
-│  │  └─ adapters/           # claude.js, chatgpt.js (one file per site)
+│  │  └─ adapters/           # claude.js, chatgpt.js, gemini.js (one file per site)
 │  └─ sidepanel/             # panel.html, panel.js, panel.css
 ├─ installers/
 │  ├─ install.ps1            # Windows: venv, models, host registry key, shortcut
@@ -244,6 +244,7 @@ Redactit/
 │  ├─ unit/                  # per module
 │  ├─ test_offline.py        # engine run with sockets disabled
 │  ├─ test_host.py           # native host round trips in Chrome's frames (hostkit.py starts it)
+│  ├─ e2e/                   # the extension in Chromium (Playwright): stand-in site, fake hosts
 │  ├─ test_watch.py          # folder watcher round trip; `redactit watch` stopped from the keyboard
 │  ├─ test_clip.py           # `redactit clip` on the real clipboard (skipped without one)
 │  ├─ test_licenses.py       # fails on any non-permissive dependency
@@ -253,7 +254,7 @@ Redactit/
 │  ├─ THREAT_MODEL.md
 │  └─ leak-reports/          # full leak report per phase
 └─ .github/
-   ├─ workflows/ci.yml       # Win/macOS/Linux: unit + text leak test + license check
+   ├─ workflows/ci.yml       # Win/macOS/Linux: unit + text leak test + license check; Linux: e2e
    └─ pull_request_template.md
 ```
 
@@ -300,13 +301,33 @@ are committed.
 
 - Permissions: `nativeMessaging`, `storage`, `sidePanel`. Host permissions:
   `https://claude.ai/*`, `https://chatgpt.com/*`, `https://gemini.google.com/*`.
-  No `<all_urls>`, no remote code, no `eval`.
-- Interception: capture-phase `paste`, `drop` and file-input `change` listeners, registered
-  at `document_start`. The original event is cancelled, the payload goes to the engine,
-  and the redacted text or file is inserted back.
-- Fail closed: if the native port is down, times out, or returns an error, the upload is
-  blocked and the user sees why. The service worker reconnects in `onDisconnect`; an open
-  port usually keeps it alive, but not reliably in every Chrome build.
+  No `<all_urls>`, no remote code, no `eval`, no `content_security_policy` key (Chrome's
+  default MV3 policy applies). Plain JS with JSDoc, no build step. `tests/unit/test_extension.py`
+  enforces all of this without a browser.
+- Extension ID: the manifest's `key` is the public half of a development key pair, so the
+  unpacked extension's ID is always `ejcaindhhnocdeolkgmcfnbemobjhllk`, the ID the
+  installer writes into the host manifest's `allowed_origins`. The private half is not in
+  the repo (`*.pem` is ignored); it is needed only to pack a `.crx` with the same ID. The
+  Chrome Web Store assigns its own key and ID at the first upload: from then on the
+  manifest carries the store's public key, and `allowed_origins` follows the store's ID.
+- Interception (`content/intercept.js`): capture-phase `paste`, `drop` and file-input
+  `input`/`change` listeners on `window`, registered at `document_start` in every frame, so
+  they run before any site listener. Only trusted events are taken (a page's own synthetic
+  events carry data it already has). The original event is cancelled, or the picked
+  files are taken out of the input, and the payload goes to the engine. The result goes
+  back as a synthetic event of the same kind carrying only redacted data, which a site's
+  editor handles like the user's; if the site ignores it, the text is inserted into the
+  field (`setRangeText`, or `insertText` in a contenteditable) and files are put in the
+  site's file input. Files come back under neutral names (`redacted-N.ext`), because a
+  file name can identify someone and the engine does not check names. A PDF goes back as
+  its redacted PDF; its Markdown is not attached. File types the engine cannot check (SVG,
+  archives, spreadsheets) are blocked. A drag that starts inside the page is left alone.
+- Fail closed: a host that is not installed, exits, sends nothing for 2 minutes (10 for
+  files, whose single OCR step reports no progress), breaks the protocol, or reports an
+  error blocks the paste or upload, with an in-page notice that says why. Nothing is
+  handed to the page until the whole result is in and checked. The service worker's
+  message API, used by the content scripts and the side panel, is documented at the top
+  of `background.js`.
 - Chunking: Chrome caps host-to-extension messages at 1 MB and extension-to-host messages
   at 64 MiB. Both directions use the same numbered-frame protocol (frames of 512 KiB),
   so one code path covers both. The protocol is specified in `hosts/native.py`:
@@ -322,6 +343,17 @@ are committed.
   text detection loads (OCR keeps warming in the background), then `ready-all`. A request
   that arrives while warming waits; it is never dropped. The host exits after 30 idle
   minutes and checks the caller's origin against its installed manifest.
+- Starting the host: the service worker connects on the first paste, drop or file pick,
+  or when an AI site loads if the user turned on "Keep Redactit ready" (`keepReady` in
+  `chrome.storage.local`, off by default). A request that arrives while the host warms
+  up is sent at once, held, and blocked if the host cannot serve it within 30 s. After an
+  unexpected disconnect the worker reconnects (backing off from 1 s to 60 s) only with
+  Keep Redactit ready on, and never after the host's own idle exit; otherwise the next
+  paste starts it. A host whose engine could not start is restarted by the next request.
+- Pseudonym scope: the chat's ID from its URL (`claude.ai/chat/<id>`, `chatgpt.com/c/<id>`,
+  `gemini.google.com/app/<id>`). A new chat gets a temporary scope for its tab; when that
+  tab reaches a chat URL, the chat keeps the temporary scope, so `[PERSON_1]` still means
+  the same person. The mapping is kept in `chrome.storage.session` (URL paths only).
 - Host launch (built in Phase 7): the manifest's `path` is a small launcher the installer
   writes. It starts the base interpreter directly, because the venv's launcher costs 1.37 s
   against 0.3-1.1 s for base Python:
@@ -333,9 +365,25 @@ are committed.
 - Review UX: `chrome.sidePanel.open()` only works synchronously inside a user gesture in
   extension code (Chrome 116+). When a paste needs review, the send is held and an
   in-page notice asks the user to click the Redactit toolbar button, which opens the panel
-  with the pending review.
-- Adapters: one file per site, isolated. Each adapter self-checks its selectors on load and
-  disables itself (fallback only) if they are missing.
+  with the pending review. For now review is an extension setting (`reviewMode`:
+  `always` or `off`); the host's results do not yet say when a span was low-confidence
+  (§12). Only extension pages can read or decide a review, so a site cannot approve its
+  own paste; a review not decided in 10 minutes blocks.
+- In-page notices live in a closed shadow root: the site can tell that one exists, but
+  cannot read it. They show status and reasons only, never content.
+- Adapters (`content/adapters/claude.js`, `chatgpt.js`, `gemini.js`): one file per site,
+  isolated, naming only the composer and the file input. Each adapter self-checks its
+  selectors for 15 s after load and disables itself (fallback only) if they are missing;
+  the generic interception still cancels, redacts or blocks. The selectors were written
+  from public descriptions of the sites and are **unverified** until the owner's manual
+  check on the live sites (Phase 5 done-when).
+- Browser tests (`tests/e2e/`, Playwright): Chromium in the new headless mode runs the
+  unpacked extension, with only the host name and test timeouts rewritten in its copy.
+  Playwright answers every request, serving stand-in chat pages at the real site URLs, so
+  the shipped manifest is what is tested and nothing reaches the network. The test host is
+  registered in the browser's own profile on Linux and macOS; on Windows Chromium reads
+  only `HKCU\Software\Chromium\NativeMessagingHosts`, so those tests run only with
+  `REDACTIT_E2E_REGISTRY=1` and always delete the key. CI runs them on Linux.
 
 ## 8. Security rules and license exceptions
 
@@ -462,3 +510,6 @@ Settled:
 - **Outbox retention**, on 2026-10-02. The owner chose 30 days, as for the pseudonym
   vault: the folder watcher deletes its redacted copies after the policy's
   `vault.retention_days`, whose default is 30 (§2.1).
+- **Low-confidence review**, on 2026-10-02. The host's results gain a flag for
+  low-confidence spans (a protocol version bump on both sides), and the review mode comes
+  from the policy rather than an extension setting.
