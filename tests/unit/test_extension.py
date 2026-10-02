@@ -50,9 +50,16 @@ def test_permissions_are_exactly_the_planned_ones():
 
 def test_content_scripts_run_first_on_the_three_sites_only():
     scripts = MANIFEST["content_scripts"]
-    assert sorted(m for s in scripts for m in s["matches"]) == sorted(SITES)
     for entry in scripts:
         assert entry["run_at"] == "document_start" and entry["all_frames"] is True
+        assert set(entry["matches"]) <= set(SITES)
+    guard, *isolated = scripts
+    # The main-world guard covers every site; nothing else runs in the page's own world.
+    assert guard == {"matches": SITES, "js": ["content/guard.js"], "run_at": "document_start",
+                     "all_frames": True, "match_origin_as_fallback": True, "world": "MAIN"}
+    assert sorted(m for s in isolated for m in s["matches"]) == sorted(SITES)
+    for entry in isolated:
+        assert "world" not in entry  # the isolated world: the page cannot reach these scripts
         assert entry["js"][-1] == "content/intercept.js"
         assert len(entry["js"]) == 2 and entry["js"][0].startswith("content/adapters/")
         assert (EXT / entry["js"][0]).is_file()
@@ -95,6 +102,15 @@ def test_the_worker_speaks_the_hosts_protocol():
     assert native.RAW_CHUNK == 384 * 1024 and "const RAW_CHUNK = 384 * 1024;" in intercept
     modes = re.search(r"const REVIEW_MODES = \[(.*?)\];", bg).group(1)
     assert set(native.REVIEW_MODES.values()) <= set(re.findall(r"'(\w+)'", modes))
+
+
+def test_the_main_world_guard_locks_what_it_replaces():
+    guard = _code(EXT / "content" / "guard.js")
+    assert "writable: false, enumerable: true, configurable: false" in guard
+    for target, name in [("Clipboard.prototype", "read"), ("Clipboard.prototype", "readText"),
+                         ("window", "showOpenFilePicker"), ("window", "showDirectoryPicker")]:
+        assert f"lock({target}, '{name}'," in guard
+    assert "'NotAllowedError'" in guard and "chrome." not in guard  # the page's world has no extension APIs
 
 
 def test_every_code_the_host_can_send_has_a_message_for_the_user():

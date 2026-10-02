@@ -170,6 +170,21 @@ def test_the_panel_redacts_text_and_sees_the_hosts_review_mode(env, chat):
     assert status["reviewMode"] in ("always", "low_confidence") and "reviewMode" not in status["settings"]
 
 
+def test_with_the_guard_in_place_a_normal_paste_still_arrives_redacted(env, chat):
+    """The main-world guard (tests/e2e/test_guard.py) refuses the page's own clipboard
+    reads; a paste, the path the guard steers sites to, still arrives redacted."""
+    b = env.browser
+    b.context.grant_permissions(["clipboard-read", "clipboard-write"], origin="https://claude.ai")
+    chat.bring_to_front()
+    assert chat.evaluate(browserkit.GUARD_PROBE) == browserkit.GUARD_REFUSED
+    chat.evaluate("document.getElementById('plain').value = ''")
+    b.paste(chat, "#plain", PASTE)
+    value = wait_for(lambda: chat.input_value("#plain"), timeout=120)
+    assert value.startswith("Please email ")
+    assert_no_raw(value)
+    assert_no_raw(page_view(chat))
+
+
 def test_nothing_raw_in_extension_storage_or_the_hosts_logs(env):
     stored = env.browser.evaluate(
         "Promise.all([chrome.storage.local.get(null), chrome.storage.session.get(null)])")

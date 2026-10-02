@@ -289,6 +289,29 @@ class Setup:
                 self.registration.close()
 
 
+# What the page's own scripts get from the calls extension/content/guard.js replaces, and
+# from trying to undo it. "+" marks Redactit's own refusal, not the browser's.
+GUARD_PROBE = """async () => {
+    const outcome = (call) => call().then(() => 'allowed', (e) => e.name + (/Redactit/.test(e.message) ? '+' : ''));
+    const result = {
+        readText: await outcome(() => navigator.clipboard.readText()),
+        read: await outcome(() => navigator.clipboard.read()),
+        picker: await outcome(() => window.showOpenFilePicker()),
+        directory: await outcome(() => window.showDirectoryPicker()),
+        deleted: delete Clipboard.prototype.readText,
+    };
+    try { Object.defineProperty(Clipboard.prototype, 'readText', {value: () => 'mine'}); result.redefined = true; }
+    catch (e) { result.redefined = e.name; }
+    window.showOpenFilePicker = () => 'mine';
+    result.assigned = window.showOpenFilePicker.name;
+    result.after = await outcome(() => navigator.clipboard.readText());
+    return result;
+}"""
+GUARD_REFUSED = {"readText": "NotAllowedError+", "read": "NotAllowedError+", "picker": "NotAllowedError+",
+                 "directory": "NotAllowedError+", "deleted": False, "redefined": "TypeError",
+                 "assigned": "showOpenFilePicker", "after": "NotAllowedError+"}
+
+
 def notice_text(context, page) -> str:
     """The text of Redactit's in-page notice, read through DevTools, which can see into a
     closed shadow root; the page itself cannot."""

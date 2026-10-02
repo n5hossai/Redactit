@@ -123,10 +123,15 @@ flowchart LR
   redone, and the outbox keeps the earlier version's output. While the watcher runs, the
   file's new fingerprint catches the change.
 - **Paths into a page the extension does not see.** It intercepts pastes, drops and
-  `<input type="file">` picks. A site that reads the clipboard itself
-  (`navigator.clipboard.read`, after the user grants it), or opens files through
-  `showOpenFilePicker`, bypasses it; none of the three sites is known to, but the adapters
-  are unverified (PLAN §7). Typed text is not intercepted at all.
+  `<input type="file">` picks. A main-world guard (`content/guard.js`, run at
+  `document_start` before the site's scripts) makes the site's own
+  `navigator.clipboard.read`/`readText` and `showOpenFilePicker`/`showDirectoryPicker`
+  reject with `NotAllowedError`, as if the user had refused, so a site falls back to the
+  intercepted paths. The replacements are non-writable and non-configurable, so the page
+  cannot reassign, redefine or delete them (`tests/e2e/test_guard.py`). A site set on
+  bypassing them still can: it can take untouched copies from another realm (a new
+  same-origin iframe read before the guard runs in it, or a worker). The guard steers; it
+  is not a sandbox. Typed text is not intercepted at all.
 - **Notice presence.** The in-page notice's text is in a closed shadow root, but the site
   can see that a notice element appeared, and so that Redactit is installed and acted.
 - **Same-user malware** can read the keychain and originals. Out of scope.

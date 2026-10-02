@@ -376,6 +376,11 @@ are committed.
   host on another protocol version (`host_incompatible`).
 - In-page notices live in a closed shadow root: the site can tell that one exists, but
   cannot read it. They show status and reasons only, never content.
+- Main-world guard (`content/guard.js`): the one script that runs in the page's own world,
+  at `document_start` on the three sites, before their scripts. It makes the site's own
+  clipboard reads and file pickers reject with `NotAllowedError`, locked against being
+  reassigned or deleted, so a site uses paste and the file input, which are intercepted.
+  What a determined page can still do is in THREAT_MODEL §5.
 - Adapters (`content/adapters/claude.js`, `chatgpt.js`, `gemini.js`): one file per site,
   isolated, naming only the composer and the file input. Each adapter self-checks its
   selectors for 15 s after load and disables itself (fallback only) if they are missing;
