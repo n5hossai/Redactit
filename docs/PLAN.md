@@ -291,8 +291,9 @@ are committed.
 - **Review mode** `always` or `low_confidence_only`. A review that times out blocks the
   send; it never passes content through unredacted.
 - **Pseudonyms** `[PERSON_1]` are allocated per chat scope. The extension derives the
-  scope from the chat URL. A brand-new chat uses a temporary scope that is re-keyed once
-  the site assigns an ID. Vault entries purge after 30 days.
+  scope from the chat URL. A brand-new chat uses a temporary scope, which the chat keeps
+  once the site assigns its ID, and which never goes to any other chat (§7). Vault entries
+  purge after 30 days.
 - **Re-mapping** of pseudonyms back to real names happens only inside the side panel,
   which is an extension page. Real names are never written into the AI site's DOM, where
   the site's scripts could read them. The panel sends the AI's reply through the service
@@ -355,9 +356,16 @@ are committed.
   Keep Redactit ready on, and never after the host's own idle exit; otherwise the next
   paste starts it. A host whose engine could not start is restarted by the next request.
 - Pseudonym scope: the chat's ID from its URL (`claude.ai/chat/<id>`, `chatgpt.com/c/<id>`,
-  `gemini.google.com/app/<id>`). A new chat gets a temporary scope for its tab; when that
-  tab reaches a chat URL, the chat keeps the temporary scope, so `[PERSON_1]` still means
-  the same person. The mapping is kept in `chrome.storage.session` (URL paths only).
+  `gemini.google.com/app/<id>`). A new chat gets a temporary scope for its tab. The worker
+  follows each tab's URL on the three sites (`tabs.onUpdated`, and every request), and only
+  the step from a new chat straight to a chat ID never used before gives that chat the
+  temporary scope, so `[PERSON_1]` still means the same person once the site has assigned
+  the ID. A tab that opens a chat already in use, or any other step, leaves the new chat's
+  scope behind: an older chat never takes labels that mean other people there. The chats
+  and their scopes are kept in `chrome.storage.local`, so they outlive a browser restart
+  and an extension update (the 5,000 most recent chats); each tab's place and temporary
+  scope in `chrome.storage.session`. Both hold URL paths and generated IDs only, never
+  content (`tests/e2e/test_scopes.py`).
 - Host launch (built in Phase 7): the manifest's `path` is a small launcher the installer
   writes. It starts the base interpreter directly, because the venv's launcher costs 1.37 s
   against 0.3-1.1 s for base Python:

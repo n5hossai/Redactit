@@ -300,10 +300,18 @@ class Setup:
         self.browser = None
         self.registration = Registration(tmp, profile, name, host) if host else None
         try:
-            self.browser = Browser(playwright, profile, build_extension(tmp / "extension", name, **build))
+            self._launch = (playwright, profile, build_extension(tmp / "extension", name, **build))
+            self.browser = Browser(*self._launch)
         except BaseException:
             self.close()
             raise
+
+    def restart_browser(self) -> None:
+        """Closes the browser and starts it again on the same profile, as a user restarting
+        it would: chrome.storage.local stays, chrome.storage.session and tab ids do not."""
+        browser, self.browser = self.browser, None
+        browser.close()
+        self.browser = Browser(*self._launch)
 
     def close(self) -> None:
         try:

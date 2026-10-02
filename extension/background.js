@@ -6,7 +6,8 @@
  * hands back only what the host redacted. It FAILS CLOSED (THREAT_MODEL T7): a missing,
  * stopped, silent or confused host, or an engine error, ends the request with `blocked`,
  * and nothing unredacted is ever handed back. It logs nothing and stores no content:
- * chrome.storage holds one setting and the chat-scope aliases (URL paths), never input.
+ * chrome.storage holds one setting and the pseudonym scopes of chats and tabs (URL paths
+ * and generated ids), never input.
  * Real values behind pseudonyms (redactit/remap) go only to extension pages, never to a
  * content script, so they never reach a site's page (THREAT_MODEL T6).
  *
@@ -862,48 +863,100 @@ function decideReview(id, approve) {
 
 // --- where a request comes from ----------------------------------------------------------
 
-/** Temporary scopes of new chats, per tab, and the chat each was later given (PLAN §6). */
-const scopes = { temp: {}, alias: {} };
-const scopesLoaded = chrome.storage.session.get({ scopes })
-  .then((s) => Object.assign(scopes, s.scopes || {}))
-  .catch(() => {});
+/**
+ * Pseudonym scopes (PLAN §6). Both maps hold URL paths and generated ids only, never
+ * anything pasted or picked.
+ *
+ * `chats`, in chrome.storage.local so it outlives a browser restart and an extension
+ * update: every chat a request was made for, mapped to its scope. That is the chat's own
+ * key (`site/chat/<id>`), or, for a chat that began as a new chat, the temporary scope it
+ * began with. Being in `chats` is what "already in use" means. The oldest entries go past
+ * MAX_CHATS.
+ *
+ * `tabs`, in chrome.storage.session (tab ids do not outlive the browser): where each tab
+ * was last seen, `new:<site>` or a chat key, and the temporary scope of the new chat
+ * open there, once a request needed one.
+ */
+const MAX_CHATS = 5000;
+const scopes = { chats: {}, tabs: {} };
+const scopesLoaded = Promise.all([
+  chrome.storage.local.get({ chatScopes: {} }).then((s) => { scopes.chats = s.chatScopes || {}; }),
+  chrome.storage.session.get({ tabScopes: {} }).then((s) => { scopes.tabs = s.tabScopes || {}; }),
+]).catch(() => {});
 
-function saveScopes() {
-  chrome.storage.session.set({ scopes }).catch(() => {});
+function saveChats() {
+  const keys = Object.keys(scopes.chats);
+  for (const key of keys.slice(0, Math.max(0, keys.length - MAX_CHATS))) delete scopes.chats[key];
+  chrome.storage.local.set({ chatScopes: scopes.chats }).catch(() => {});
+}
+
+function saveTabs() {
+  chrome.storage.session.set({ tabScopes: scopes.tabs }).catch(() => {});
+}
+
+/** The chat key of a page on `site`, or null for a new chat (or any page without a chat id). */
+function chatKeyOf(site, pageUrl) {
+  const match = pageUrl && pageUrl.hostname === site ? SITES[site].exec(pageUrl.pathname) : null;
+  return match ? `${site}/chat/${match[1]}` : null;
+}
+
+/**
+ * Records that the tab now shows `pageUrl`. A new chat has no id until its first message,
+ * when the site moves the tab to the chat's URL; seen as exactly that step, from a new
+ * chat with a temporary scope to a chat id never used before, the chat keeps the
+ * temporary scope, and [PERSON_1] still means the same person. Any other step (to a chat
+ * that is already in use, from another chat, from another site) gives the chat nothing,
+ * and the new chat's temporary scope is dropped with the tab's leaving it.
+ */
+function observeTab(site, pageUrl, tabId) {
+  const tab = String(tabId ?? 'none');
+  const was = scopes.tabs[tab] || null;
+  const key = chatKeyOf(site, pageUrl);
+  const at = key || `new:${site}`;
+  if (was && was.at === at) return was;
+  if (key && was && was.at === `new:${site}` && was.temp && !Object.hasOwn(scopes.chats, key)) {
+    scopes.chats[key] = was.temp;
+    saveChats();
+  }
+  scopes.tabs[tab] = { at, temp: null };
+  saveTabs();
+  return scopes.tabs[tab];
 }
 
 /**
  * The pseudonym scope for a request: the chat's id from its URL, so pseudonyms stay
- * stable within a chat. A new chat has no id yet, so it gets a temporary scope for its
- * tab; when that tab reaches a chat URL, the chat keeps the temporary scope, and
- * [PERSON_1] still means the same person.
+ * stable within a chat, or the scope that chat began with as a new chat. A new chat gets
+ * a temporary scope for its tab (observeTab).
  */
 function scopeFor(site, pageUrl, tabId) {
-  const match = pageUrl && pageUrl.hostname === site ? SITES[site].exec(pageUrl.pathname) : null;
-  const tabKey = String(tabId ?? 'none');
-  if (match) {
-    const key = `${site}/chat/${match[1]}`;
-    if (scopes.alias[key]) return scopes.alias[key];
-    const temp = scopes.temp[tabKey];
-    if (temp && temp.startsWith(`${site}/`)) {
-      scopes.alias[key] = temp;
-      delete scopes.temp[tabKey];
-      saveScopes();
-      return temp;
+  const state = observeTab(site, pageUrl, tabId);
+  const key = chatKeyOf(site, pageUrl);
+  if (key) {
+    if (!Object.hasOwn(scopes.chats, key)) {
+      scopes.chats[key] = key;
+      saveChats();
     }
-    return key;
+    return scopes.chats[key];
   }
-  if (!scopes.temp[tabKey]?.startsWith(`${site}/`)) {
-    scopes.temp[tabKey] = `${site}/new/${newId('t')}`;
-    saveScopes();
+  if (!state.temp) {
+    state.temp = `${site}/new/${newId('t')}`;
+    saveTabs();
   }
-  return scopes.temp[tabKey];
+  return state.temp;
 }
 
+// The site moves a tab from a new chat to the chat's URL without a request in between;
+// seeing every step is what keeps a later request in another chat from taking the scope.
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  const url = info.url && safeUrl(info.url); // given only for our three sites
+  const site = url && siteOf(url.origin);
+  if (site) scopesLoaded.then(() => observeTab(site, url, tabId));
+});
+
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (scopes.temp[String(tabId)]) {
-    delete scopes.temp[String(tabId)];
-    saveScopes();
+  if (scopes.tabs[String(tabId)]) {
+    delete scopes.tabs[String(tabId)];
+    saveTabs();
   }
   pageAdapters.delete(tabId);
 });

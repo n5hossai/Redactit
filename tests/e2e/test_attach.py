@@ -90,6 +90,19 @@ def test_a_content_script_cannot_attach(setup, tmp_path):
     assert attach(s, panel, job, tab) == {"ok": True}  # still there for the panel
 
 
+def test_attach_is_refused_once_the_tab_shows_another_chat(setup, tmp_path):
+    """The copy's labels belong to the new chat it was redacted for. When the same tab
+    opens a chat already in use, that chat has its own [PERSON_1]."""
+    s, chat, panel, job, tab = prepared(setup, tmp_path)
+    other = s.browser.open("https://claude.ai/chat/existing-chat-0001")
+    s.browser.paste(other, ".ProseMirror", "Hello")  # a request there: the chat is in use
+    s.browser.wait_recent(2)
+    chat.goto("https://claude.ai/chat/existing-chat-0001")
+    answer = attach(s, panel, job, tab)
+    assert (answer["ok"], answer["code"]) == (False, "expired")
+    assert chat.evaluate("window.__attachments.length") == 0
+
+
 def test_a_tab_that_left_the_allowed_sites_is_refused(setup, tmp_path):
     s, chat, panel, job, tab = prepared(setup, tmp_path)
     chat.goto(browserkit.HELPER)  # the same tab, now on a site Redactit does not serve
