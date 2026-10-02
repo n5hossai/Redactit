@@ -7,5 +7,6 @@
  * nothing here is logged, stored or sent anywhere but the service worker.
  */
 import { initDropzone } from './dropzone.js';
+import { initResult } from './result.js';
 
-initDropzone({ show() {}, clear() {} });
+initDropzone(initResult());
