@@ -141,6 +141,20 @@
         </button>
       </div>
       <p class="note" id="resultNote" hidden></p>
+      <div class="attach-review" id="attachReview" role="group" aria-labelledby="attachReviewTitle" hidden>
+        <p class="label" id="attachReviewTitle" tabindex="-1">Review before attaching</p>
+        <p class="help" id="attachReviewReason"></p>
+        <div class="preview">
+          <textarea class="out preview-text" rows="4" readonly aria-label="Redacted copy to review" hidden></textarea>
+          <img class="preview-image" alt="The redacted image to review" hidden>
+          <a class="btn preview-file" target="_blank" rel="noopener" hidden><span>Open the redacted PDF</span></a>
+          <p class="help preview-note" hidden></p>
+        </div>
+        <div class="row">
+          <button type="button" class="btn primary" id="attachApprove"><span>Approve and attach</span></button>
+          <button type="button" class="btn" id="attachReviewCancel"><span>Cancel</span></button>
+        </div>
+      </div>
       <p class="help">Attach puts the copy in this chat's message box. You can also download it, or drag the left folder to your desktop to save it there.</p>
     </div>
   </section>

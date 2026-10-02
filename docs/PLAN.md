@@ -404,7 +404,11 @@ are committed.
     or until the panel starts another file, and only for the tab and chat it was redacted
     for, whose pseudonym labels it carries. The tab's content script inserts the file part
     as a redacted drop (composer, else file input) and refuses without a working adapter
-    (`insert_failed`); other refusals are `expired` and `not_allowed_site`. Dragging the left folder carries only
+    (`insert_failed`); other refusals are `expired` and `not_allowed_site`. The policy's
+    review applies here as to a page's paste: a copy it would hold (`always`, or
+    `low_confidence` with decisions marked) is refused with `review_required` until the
+    panel has shown it (the text, the image, or the PDF itself and its page text) and the
+    user has pressed Approve, which sends `approve: true`. Dragging the left folder carries only
     `DownloadURL`, which saves the copy where it is dropped outside the browser: Chromium
     does not carry a File made in a page to another page (it arrives as its name in
     `text/plain`, which a chat would paste; recorded in `tests/e2e/test_panel.py`).

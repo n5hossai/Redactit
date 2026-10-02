@@ -4,7 +4,10 @@
  * 1. Attach to chat: the worker hands the copy it checked to the chat tab's content
  *    script, which puts it in the composer the way it puts in a redacted drop. The panel
  *    names only the job, never bytes, so nothing but host output can reach a page that
- *    way. Until the worker has that message (`redactit/attach`), the panel says so.
+ *    way. Until the worker has that message (`redactit/attach`), the panel says so. When
+ *    the policy holds the copy for review (`review_required`), the panel shows it here
+ *    (preview.js: the text, the image, or the PDF itself and its page text, the bytes the
+ *    worker would attach) and attaches only after an explicit Approve.
  * 2. Drag: Chromium does not carry a File made in a page to another page. One added to
  *    the drag in `dragstart` arrives at a drop target only as its name, in text/plain
  *    (tests/e2e/test_panel.py records this), and a chat would paste that name. So the
@@ -12,8 +15,15 @@
  * 3. Download: a link to a blob URL, which extension pages may download.
  */
 import { $, announce, ask, copyText, setNote } from './common.js';
+import { clearPreview, showPreview } from './preview.js';
 
 /** @typedef {import('./dropzone.js').Redacted} Redacted */
+
+const REVIEW_REASONS = {
+  always: "Your organization's policy asks for a review of every file before it goes to a chat. Check the "
+    + 'redacted copy, then approve it.',
+  low_confidence: 'Redactit was unsure about part of this copy. Check it before it goes to the chat.',
+};
 
 export function initResult() {
   /** @type {Redacted|null} */
@@ -27,6 +37,8 @@ export function initResult() {
   const link = $('downloadLink');
   const note = $('resultNote');
   const attachBtn = $('attachBtn');
+  const review = $('attachReview');
+  let reviewShown = null; // {revoke} while the copy is on view for review
 
   function show(r) {
     clear();
@@ -43,6 +55,7 @@ export function initResult() {
 
   /** Forgets the copy: its blob URL stops working, so nothing can be dragged or saved. */
   function clear() {
+    hideReview();
     current = null;
     if (url) URL.revokeObjectURL(url);
     url = null;
@@ -51,11 +64,40 @@ export function initResult() {
     note.hidden = true;
   }
 
-  async function attach() {
+  function hideReview() {
+    reviewShown?.revoke();
+    reviewShown = null;
+    review.hidden = true;
+    clearPreview(review);
+  }
+
+  /**
+   * The copy as the worker would attach it: a PDF or an image is the file itself (a PDF
+   * beside its page text, which does not go), a text or Word file its text. Approve stays
+   * disabled if any of it cannot be shown.
+   */
+  function showReview(reason) {
+    hideReview();
+    const isFile = current.blob.type === 'application/pdf' || current.blob.type.startsWith('image/');
+    reviewShown = showPreview(review, { text: current.text, file: isFile ? current.blob : null });
+    $('attachReviewReason').textContent = REVIEW_REASONS[reason] || REVIEW_REASONS.always;
+    $('attachApprove').disabled = !reviewShown.shown;
+    review.hidden = false;
+    note.hidden = true;
+    $('attachReviewTitle').focus();
+    announce('Review the redacted copy before it is attached.');
+  }
+
+  async function attach(approve = false) {
     if (!current || attachBtn.getAttribute('aria-busy') === 'true') return;
     attachBtn.setAttribute('aria-busy', 'true');
-    const reply = await ask({ type: 'redactit/attach', job: current.job, tabId: current.tabId });
+    const reply = await ask({ type: 'redactit/attach', job: current.job, tabId: current.tabId, approve });
     attachBtn.removeAttribute('aria-busy');
+    if (reply && reply.ok === false && reply.code === 'review_required' && !approve) {
+      showReview(reply.reason);
+      return;
+    }
+    hideReview();
     if (reply && reply.ok === true) {
       setNote(note, 'Attached to the chat. Check it there before you send it.', 'good');
       announce('Attached to the chat.');
@@ -97,6 +139,14 @@ export function initResult() {
     attach();
   });
   attachBtn.addEventListener('click', () => attach());
+  $('attachApprove').addEventListener('click', () => {
+    if (reviewShown?.shown) attach(true);
+  });
+  $('attachReviewCancel').addEventListener('click', () => {
+    hideReview();
+    setNote(note, 'Not attached. The copy is still here to download.', '');
+    announce('Not attached.');
+  });
 
   $('copyResultBtn').addEventListener('click', async () => {
     if (!current || current.text === null) return;

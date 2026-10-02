@@ -55,15 +55,18 @@
  *       Extension pages only: `text` (from the AI) with the tab's chat pseudonyms replaced
  *       by their real values, using the same scope as that tab's redactions. At most 8 MiB.
  *       The result holds real values: show it in the panel, never write it into a page.
- *   redactit/attach {job, tabId}   -> {ok: true} | {ok: false, code, message}. Extension
- *       pages only. Hands the redacted file of the panel's last finished file job (`job`,
+ *   redactit/attach {job, tabId, approve?}   -> {ok: true} | {ok: false, code, message, reason?}.
+ *       Extension pages only. Hands the redacted file of the panel's last finished file job (`job`,
  *       from its `accepted`) to the chat in `tabId`, through that tab's content script,
  *       which inserts it as it would a redacted drop. Only the bytes this worker received
  *       from the host and checked can be attached; the caller sends none. The copy is
  *       kept in memory until attached, replaced by the panel's next file job, or 10
  *       minutes pass, and only for the tab and chat it was redacted for. Codes: expired
  *       (unknown, replaced, timed out, or the tab now shows another chat),
- *       not_allowed_site, insert_failed (no adapter, or the page took nothing).
+ *       not_allowed_site, insert_failed (no adapter, or the page took nothing), and
+ *       review_required {reason: 'always'|'low_confidence'}: the policy holds this copy, as
+ *       it would a page's (see Review), so the panel shows it and sends approve: true only
+ *       on the user's explicit approval.
  *       The file part goes (a PDF or image), never a PDF's Markdown; a text or Word
  *       file's one text part is the file. At most about 48 MiB (a message's limit).
  *   redactit/review-list          -> [Review]. Extension pages only.
@@ -86,7 +89,8 @@
  *   Review: {job, site, kind, parts, createdAt, expiresAt, reason: 'always'|'low_confidence'}
  *       A page's result is held for review when the host's policy says so: always, or
  *       with low_confidence when the engine marked any decision for review. Never with
- *       'off'. A result requested by an extension page is never held.
+ *       'off'. A result requested by an extension page is not held: it goes to the panel,
+ *       and from there to a chat only through redactit/attach, which holds it the same way.
  *
  * ### Events for the side panel: `chrome.runtime.connect({name: 'redactit/events'})`
  *
@@ -180,6 +184,7 @@ const REASONS = {
   cancelled: 'Cancelled.',
   insert_failed: 'Redactit could not hand the redacted version to this page.',
   expired: 'This redacted copy is no longer available for this chat. Redact the file again.',
+  review_required: "Your organization's policy asks you to review this copy before it goes to the chat.",
   extension_error: 'Redactit hit an internal error.',
   internal: 'Redactit hit an internal error.',
 };
@@ -681,7 +686,8 @@ let attachTimer = null;
 function keepForAttach(job) {
   forgetAttachable();
   attachable = { job: job.id, kind: job.kind, tabId: job.tabId, site: job.site, scope: job.scope,
-    parts: job.result.parts, size: job.result.size, chunks: job.chunks, expiresAt: Date.now() + ATTACH_KEEP_MS };
+    parts: job.result.parts, size: job.result.size, chunks: job.chunks, review: job.result.review,
+    expiresAt: Date.now() + ATTACH_KEEP_MS };
   attachTimer = setTimeout(forgetAttachable, ATTACH_KEEP_MS);
 }
 
@@ -715,6 +721,10 @@ async function attachToChat(msg) {
   if (msg.tabId !== kept.tabId || site !== kept.site || scopeFor(site, url, msg.tabId) !== kept.scope) {
     return fail('expired'); // another tab or another chat now: its labels would mean other people
   }
+  // The policy's review applies to what reaches a chat, however it gets there: a copy the
+  // policy would hold goes in only once the panel has shown it and the user approved.
+  const reason = reviewReason(kept.review);
+  if (reason && msg.approve !== true) return { ...fail('review_required'), reason };
   const index = kept.parts.findIndex((p) => p.name === 'file');
   const part = kept.parts[index >= 0 ? index : 0];
   const ext = ATTACH_TYPES[part.media_type];

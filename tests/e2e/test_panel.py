@@ -19,7 +19,7 @@ import pytest
 pytest.importorskip("playwright")
 
 import browserkit  # noqa: E402
-from browserkit import page_view, wait_for  # noqa: E402
+from browserkit import blob_bytes, page_view, wait_for  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
 NAME, EMAIL, CARD = "Priya Okafor", "priya.okafor@northwind.com", "4111 1111 1111 1111"
@@ -319,16 +319,6 @@ def test_a_held_paste_is_approved_or_cancelled_in_the_review_queue(setup, mode, 
             assert editor.inner_text() == ""
     assert panel.is_visible("#reviewEmpty")
     assert_no_raw(page_view(chat))
-
-
-def blob_bytes(panel, url: str) -> bytes:
-    """The bytes behind one of the panel's blob URLs, read in the panel's own page."""
-    return base64.b64decode(panel.evaluate("""async (url) => {
-      const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
-      let bin = '';
-      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-      return btoa(bin);
-    }""", url))
 
 
 @pytest.mark.parametrize("kind", ["png", "pdf"])

@@ -396,6 +396,16 @@ def wait_for(predicate, timeout: float = 60, step: float = 0.2):
     raise TimeoutError("condition not met")
 
 
+def blob_bytes(page, url: str) -> bytes:
+    """The bytes behind one of an extension page's blob URLs, read in that page."""
+    return base64.b64decode(page.evaluate("""async (url) => {
+      const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return btoa(bin);
+    }""", url))
+
+
 def page_view(page) -> str:
     """Everything the page's scripts saw or hold: event records, files, DOM history, markup."""
     return json.dumps(page.evaluate(
