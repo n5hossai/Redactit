@@ -378,6 +378,39 @@ are committed.
   as if `always`. Only extension pages can read or decide a review, so a site cannot
   approve its own paste; a review not decided in 10 minutes blocks. The worker refuses a
   host on another protocol version (`host_incompatible`).
+- Side panel (`sidepanel/`, plain ES modules, no build step): an extension page, so the
+  only place real values may appear (THREAT_MODEL T6). It works for the chat in view: the
+  active tab of its window, whose site and chat set the rules and the pseudonym scope
+  (`tabId` in the worker's API); opened as a tab of its own, the chat tab used last.
+  - Drop zone: the approved face design. A file dropped or picked on the right folder goes
+    through the job port in the host's chunk framing; the right folder drains, the left
+    fills with the redacted copy, and the smile shows the percentage. Progress moves only
+    on real milestones (upload, `queued`, `redacting`, PDF page N of M, the result's
+    chunks); a stage with no finer report holds its level while the divider's dots move,
+    beside an elapsed clock. Held (warming, review), blocked (the worker's fixed reason)
+    and cancel are shown. One file at a time; the copy gets a neutral name
+    (`redacted-N.ext`).
+  - Getting the copy out: Attach to chat asks the worker to hand the copy it checked to
+    the tab's composer, naming only the job (`redactit/attach {job}`, not in the worker
+    yet: the panel says it is not available). Dragging the left folder carries only
+    `DownloadURL`, which saves the copy where it is dropped outside the browser: Chromium
+    does not carry a File made in a page to another page (it arrives as its name in
+    `text/plain`, which a chat would paste; recorded in `tests/e2e/test_panel.py`).
+    Download is a blob-URL link. Text results, and a PDF's page text, can be copied.
+  - Redact & copy (`redactit/redact-text`) copies only the redacted text.
+  - Status pill and the chat in view from the events port; "Keep Redactit ready" writes
+    `keepReady`; the review mode is shown read-only, `Not known yet` until the host's
+    policy loads, an unknown mode as off.
+  - Review queue: each held item with what and where it is, why it is held
+    (`always` or `low_confidence`), the time left and its redacted text; Approve or Cancel.
+  - Re-mapping (`redactit/remap`): a pasted reply is shown with real values, as text in
+    the panel's DOM only. Never stored, never sent to a tab, never copied by itself:
+    copying takes its own click beside a warning that the text holds real data, and the
+    view clears when the chat in view changes.
+  - Keyboard operable with visible focus, a polite live region, `prefers-reduced-motion`
+    (levels step, dots stop), 320 to 500 px wide, light and dark from
+    `prefers-color-scheme`. System fonts; icons are cloned from templates, so no markup is
+    built from strings.
 - In-page notices live in a closed shadow root: the site can tell that one exists, but
   cannot read it. They show status and reasons only, never content.
 - Main-world guard (`content/guard.js`): the one script that runs in the page's own world,
@@ -397,7 +430,12 @@ are committed.
   the shipped manifest is what is tested and nothing reaches the network. The test host is
   registered in the browser's own profile on Linux and macOS; on Windows Chromium reads
   only `HKCU\Software\Chromium\NativeMessagingHosts`, so those tests run only with
-  `REDACTIT_E2E_REGISTRY=1` and always delete the key. CI runs them on Linux.
+  `REDACTIT_E2E_REGISTRY=1` and always delete the key. CI runs them on Linux. The side
+  panel's tests put a scripted host (`tests/e2e/stubhost.js`, protocol 2) behind the
+  worker's `connectNative`, so the worker's own framing, holds, review and checks run on
+  every OS with no host registered; one panel test drops a PDF through the real host.
+  Where Playwright's Chromium cannot start, `REDACTIT_E2E_CHROMIUM` names another
+  Chromium build (Microsoft Edge runs the unpacked extension).
 
 ## 8. Security rules and license exceptions
 
