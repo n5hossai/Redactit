@@ -44,6 +44,20 @@ ORIGIN = f"chrome-extension://{EXTENSION_ID}/"
 REGISTRY_PATHS = (r"Software\Chromium\NativeMessagingHosts",)
 
 
+def unavailable(reason: str, *, module: bool = False):
+    """Skips, unless REDACTIT_E2E_REQUIRED=1 (CI's e2e job), where a skip would let the
+    job pass without having tested anything."""
+    import pytest
+
+    if os.environ.get("REDACTIT_E2E_REQUIRED") == "1":
+        pytest.fail(f"required browser test cannot run: {reason}", pytrace=False)
+    pytest.skip(reason, allow_module_level=module)
+
+
+REGISTRY_REASON = ("Windows Chromium finds native hosts only in the registry; "
+                   "set REDACTIT_E2E_REGISTRY=1 to let this test add and remove an HKCU key")
+
+
 def registry_allowed() -> bool:
     return sys.platform != "win32" or os.environ.get("REDACTIT_E2E_REGISTRY") == "1"
 

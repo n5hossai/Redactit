@@ -13,17 +13,17 @@ import time
 
 import pytest
 
-pytest.importorskip("playwright")
+pytest.importorskip("playwright")  # before hashing the models below: most runs stop here
 
+import browserkit  # noqa: E402
 from redactit import models  # noqa: E402
 
 try:
     models.path_for("gliner/model.onnx")
     models.path_for("yunet/face_detection_yunet_2023mar.onnx")
 except models.ModelError:
-    pytest.skip("models not installed; run `redactit setup-models`", allow_module_level=True)
+    browserkit.unavailable("models not installed; run `redactit setup-models`", module=True)
 
-import browserkit  # noqa: E402
 import numpy as np  # noqa: E402
 from browserkit import notice_text, page_view, wait_for  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
@@ -39,8 +39,7 @@ LINES = [f"Patient: {NAME}", f"Email: {EMAIL}", f"Card: {CARD}"]
 @pytest.fixture(scope="module")
 def env(playwright, tmp_path_factory):
     if not browserkit.registry_allowed():
-        pytest.skip("Windows Chromium finds native hosts only in the registry; "
-                    "set REDACTIT_E2E_REGISTRY=1 to let this test add and remove an HKCU key")
+        browserkit.unavailable(browserkit.REGISTRY_REASON)
     s = browserkit.Setup(playwright, tmp_path_factory.mktemp("round-trip"), host="real", adapter_check_ms=1500)
     yield s
     s.close()

@@ -6,6 +6,7 @@ event loop needs a local socket pair, so these tests lift the suite's socket ban
 pages themselves are answered by Playwright and nothing reaches the network.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -24,20 +25,20 @@ def pytest_collection_modifyitems(items):
 
 @pytest.fixture(scope="session")
 def playwright():
-    sync_api = pytest.importorskip("playwright.sync_api", reason="needs the e2e group: uv run --group e2e")
-    with sync_api.sync_playwright() as p:
-        try:
-            p.chromium.executable_path  # noqa: B018 - raises if Playwright's browsers are missing
-        except Exception:  # noqa: BLE001
-            pytest.skip("Chromium not installed: uv run --group e2e playwright install chromium")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        browserkit.unavailable("needs the e2e group: uv run --group e2e")
+    with sync_playwright() as p:
+        if not os.environ.get("REDACTIT_E2E_CHROMIUM") and not Path(p.chromium.executable_path).exists():
+            browserkit.unavailable("Chromium not installed: uv run --group e2e playwright install chromium")
         yield p
 
 
 @pytest.fixture
 def needs_registry():
     if not browserkit.registry_allowed():
-        pytest.skip("Windows Chromium finds native hosts only in the registry; "
-                    "set REDACTIT_E2E_REGISTRY=1 to let this test add and remove an HKCU key")
+        browserkit.unavailable(browserkit.REGISTRY_REASON)
 
 
 @pytest.fixture
