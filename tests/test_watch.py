@@ -29,6 +29,7 @@ import run as leak  # noqa: E402
 import yaml  # noqa: E402
 from redactit.audit import AuditLog  # noqa: E402
 from redactit.cli import redact_file  # noqa: E402
+from redactit.copies import Copies  # noqa: E402
 from redactit.hosts.watcher import TEMP_PREFIX, Watcher  # noqa: E402
 from redactit.pipeline import Engine  # noqa: E402
 from redactit.policy import DEFAULT_POLICY, load_policy  # noqa: E402
@@ -87,7 +88,7 @@ def test_dropped_files_come_out_redacted(corpus, engine, tmp_path):
     originals = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in inbox.iterdir()}
 
     log, stop = [], threading.Event()
-    watch = Watcher(inbox, outbox, log=log.append)
+    watch = Watcher(inbox, outbox, copies=Copies(tmp_path / "data" / "copies.json"), log=log.append)
     convert = lambda name, data: redact_file(name, data, eng, uuid.uuid4().hex, destination="outbox")  # noqa: E731
     thread = threading.Thread(target=watch.run, args=(convert, stop), daemon=True)
     thread.start()
@@ -137,6 +138,12 @@ def test_ctrl_c_stops_the_watch_command_and_removes_its_temp_folder(tmp_path):
             proc.kill()
     assert "redactit watch: stopped" in read()
     assert temp_folders(outbox) == []
+    # The command records its output in the data folder, to be deleted once it expires,
+    # and audits the start-up purge.
+    index = json.loads((tmp_path / "data" / "copies.json").read_text(encoding="utf-8"))
+    assert [e["path"] for e in index["copies"]] == [str(outbox / "note.txt")]
+    events = [json.loads(line)["event"] for line in (tmp_path / "data" / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert "copies_purge" in events and "redaction" in events
     out = (outbox / "note.txt").read_text(encoding="utf-8")
     assert "Okafor" not in out and "[PERSON_1]" in out
     assert not [v for v in ("Priya", "Okafor", "corp.local") if v in read()]
