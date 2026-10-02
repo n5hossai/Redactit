@@ -136,7 +136,9 @@
     const items = (req.text ? 1 : 0) + req.files.length;
     const what = req.files.length > 1 ? `${req.files.length} files` : req.files.length ? 'this file' : 'this paste';
     const task = { ports: new Set(), what };
-    const slow = setTimeout(() => notice.show('info', `Redactit is checking ${what}…`, task), SLOW_NOTICE_MS);
+    // Shown only if nothing more specific (starting, page N, review) has been said yet.
+    const slow = setTimeout(() => task.shown || notice.show('info', `Redactit is checking ${what}…`, task),
+      SLOW_NOTICE_MS);
     const blocked = [];
     let text = '';
     const files = [];
@@ -572,6 +574,7 @@
       if (!host.isConnected) (document.body || document.documentElement).append(host);
       clearTimeout(timer);
       owner = task || null;
+      if (task) task.shown = true;
       text.textContent = message;
       text.parentElement.className = `box ${kind}`;
       cancel.hidden = !task;
