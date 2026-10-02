@@ -770,8 +770,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 const ownOrigin = chrome.runtime.getURL('');
-const fromExtensionPage = (sender) => !sender.tab && typeof sender.url === 'string' && sender.url.startsWith(ownOrigin);
-const fromContentScript = (sender) => Boolean(sender.tab) && typeof sender.origin === 'string';
+/** One of our own pages (the side panel, or the same page open in a tab). A content
+ * script's sender URL is the site's, never ours, so a site cannot pass for one. */
+const fromExtensionPage = (sender) => typeof sender.url === 'string' && sender.url.startsWith(ownOrigin);
+const fromContentScript = (sender) => Boolean(sender.tab) && typeof sender.origin === 'string'
+  && !fromExtensionPage(sender);
 
 function siteOf(origin) {
   try {
