@@ -93,6 +93,8 @@ def test_the_worker_speaks_the_hosts_protocol():
     assert f"const HOST_NAME = '{template['name']}';" in bg
     assert f"const PROTOCOL = {native.PROTOCOL};" in bg
     assert native.CHUNK == 512 * 1024 and "const CHUNK = 512 * 1024;" in bg
+    host = Path(native.__file__).read_text(encoding="utf-8")
+    assert re.search(r"^CHUNK = 512 \* 1024  #", host, re.M)  # written as the worker writes it
     assert "const RAW_CHUNK = (CHUNK / 4) * 3;" in bg and native.RAW_CHUNK == native.CHUNK // 4 * 3
     assert native.MAX_PAYLOAD == 64 * 2**20 and "const MAX_PAYLOAD = 64 * 1024 * 1024;" in bg
     assert f"const MAX_JOBS = {native.MAX_IN_FLIGHT};" in bg
