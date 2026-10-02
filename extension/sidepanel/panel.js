@@ -7,6 +7,7 @@
  * nothing here is logged, stored or sent anywhere but the service worker.
  */
 import { initDropzone } from './dropzone.js';
+import { initRemap } from './remap.js';
 import { initResult } from './result.js';
 import { initReviews } from './reviews.js';
 import { initStatus } from './status.js';
@@ -15,4 +16,8 @@ import { initTextbox } from './textbox.js';
 initDropzone(initResult());
 initTextbox();
 const reviews = initReviews();
-initStatus({ onReviews: (list, mode) => reviews.update(list, mode) });
+const remap = initRemap();
+initStatus({
+  onReviews: (list, mode) => reviews.update(list, mode),
+  onTarget: (target) => remap.targetChanged(target),
+});
