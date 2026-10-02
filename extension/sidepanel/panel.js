@@ -8,7 +8,9 @@
  */
 import { initDropzone } from './dropzone.js';
 import { initResult } from './result.js';
+import { initStatus } from './status.js';
 import { initTextbox } from './textbox.js';
 
 initDropzone(initResult());
 initTextbox();
+initStatus();
