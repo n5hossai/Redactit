@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Redactit",
+  "version": "0.1.0",
+  "description": "Removes sensitive data on this computer before a paste or upload reaches an AI chat site.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwYlCfQZ2p7f3WFD59DrKbu4i4NkveryUSsQbf17l8zvItmoWoub9/5xA0qB5lhwFTwawKVu3nvjN/JSdhhXCQiSj7ZedMKXcw83AcFzEY127hlgK47tH34MzQ2cr9BP7Jd1n+ERrxtdHw1xX3IhsscOedrGmQyn1kOTBMPCArIBKizsp1RzTZdRtA98hbYn8CIj0g5O+pBQ3syA+I6UWYErqdwaGNsLX2rC1w3ZavPcpoItODIFQy2nq7bEbsCHqfvzm0I4fh3dTowOzZaIXAfJNtcTTGHRDIyu77eIvaMV6qZBPWbP5ObFABonhUnEk6muzYit9S+3J6OZxWM1pZQIDAQAB",
+  "minimum_chrome_version": "116",
+  "permissions": ["nativeMessaging", "storage", "sidePanel"],
+  "host_permissions": ["https://claude.ai/*", "https://chatgpt.com/*", "https://gemini.google.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Redactit"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/panel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://claude.ai/*", "https://chatgpt.com/*", "https://gemini.google.com/*"],
+      "js": ["content/guard.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_origin_as_fallback": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["content/adapters/claude.js", "content/intercept.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_origin_as_fallback": true
+    },
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["content/adapters/chatgpt.js", "content/intercept.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_origin_as_fallback": true
+    },
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["content/adapters/gemini.js", "content/intercept.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_origin_as_fallback": true
+    }
+  ]
+}

@@ -12,6 +12,10 @@ gets the same output names. The rules:
 - Each output is written to a private folder inside the outbox (0700, or an owner-only
   ACL on Windows) and renamed into place, so the outbox never shows a partial file. The
   folder is removed when the watcher stops, by error or Ctrl+C too (THREAT_MODEL T11).
+- Every output is recorded (redactit.copies) and deleted once it is as old as the vault's
+  retention period (the policy's vault.retention_days, 30 days by default), by a purge at
+  start-up and about once an hour. Only recorded copies that are still as written are
+  deleted, never the user's own files in the outbox, and never anything in the inbox.
 - Log lines give the file type and a reason, never a file's name or content: a name such
   as "<person> passport.png" is sensitive on its own, and logs outlive the run.
 - Only the inbox's top level is watched; hidden files and Word's "~$" lock files are not
@@ -34,6 +38,7 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import platformdirs
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -43,16 +48,17 @@ from redactit.cli import SUFFIXES, output_name, output_suffixes
 from redactit.hosts.native import MAX_PAYLOAD
 from redactit.types import RedactitError
 
+if TYPE_CHECKING:  # copies.py imports this module's link rule, so the object is passed in
+    from redactit.copies import Copies
+
 SETTLE_SECONDS = 2.0  # how long a file's size and mtime must hold before it is read
 POLL_SECONDS = 0.25
 MAX_FILE = MAX_PAYLOAD  # one file, as large as the browser extension may send one
 TEMP_PREFIX = ".redactit-tmp-"
 
-# How long redacted copies stay in the outbox is not decided yet (docs/PLAN.md §12). Until
-# the owner decides, the watcher deletes nothing: None keeps every output until the user
-# removes it. A purge, once chosen, runs from Watcher.run's loop, reads this value, and
-# must never touch the inbox.
-OUTBOX_RETENTION_DAYS: int | None = None
+# How often a running watcher deletes expired copies. Retention is counted in days (the
+# policy's vault.retention_days), so a copy outlives it by at most about an hour.
+PURGE_SECONDS = 3600.0
 
 # (input file name, its bytes) -> each output's name and its text or bytes (cli.redact_file)
 Convert = Callable[[str, bytes], list[tuple[str, str | bytes]]]
@@ -92,6 +98,9 @@ def _is_link(st) -> bool:
     Other reparse points are files with content of their own and are read. OneDrive's
     Files-On-Demand placeholders carry one, and Desktop and Documents are often inside
     OneDrive; reading a placeholder makes the sync client fetch it, not this process.
+
+    The retention purge (redactit.copies) uses the same rule: a copy that has become a
+    link is never deleted.
     """
     if stat.S_ISLNK(st.st_mode):  # what os.path.islink reports, taken from the same lstat
         return True
@@ -126,13 +135,18 @@ def _private_dir(parent: Path) -> Path:
 
 
 class Watcher:
-    """Watches `inbox` and writes what `convert` returns for each settled file to `outbox`."""
+    """Watches `inbox` and writes what `convert` returns for each settled file to `outbox`.
 
-    def __init__(self, inbox: Path, outbox: Path, *, settle: float = SETTLE_SECONDS,
-                 poll: float = POLL_SECONDS, log: Callable[[str], None] = _log) -> None:
+    `copies` records every output and deletes expired ones. It is required, so no caller
+    can publish outputs that would never expire.
+    """
+
+    def __init__(self, inbox: Path, outbox: Path, *, copies: Copies, settle: float = SETTLE_SECONDS,
+                 poll: float = POLL_SECONDS, purge_every: float = PURGE_SECONDS,
+                 log: Callable[[str], None] = _log) -> None:
         self.inbox, self.outbox = Path(inbox).resolve(), Path(outbox).resolve()
         self._refuse_same_folder()  # here as well as in run, so `redactit watch` refuses before the models load
-        self.settle, self.poll, self.log = settle, poll, log
+        self.copies, self.settle, self.poll, self.purge_every, self.log = copies, settle, poll, purge_every, log
         self.temp: Path | None = None  # the private folder outputs are written in; exists only while running
         self._lock = threading.Lock()  # guards _pending, which the observer's thread adds to
         self._pending: dict[Path, tuple[tuple[int, int], float] | None] = {}  # path -> ((size, mtime), stable since)
@@ -156,9 +170,17 @@ class Watcher:
         try:
             observer.schedule(_Events(self), str(self.inbox), recursive=False)
             observer.start()
+            # Before the scan, which redoes an input whose outputs are missing: an input left in
+            # the inbox gets fresh copies at the first start-up after its old ones expire,
+            # not one start-up later. The purge never touches the inbox.
+            self._purge()
+            next_purge = time.monotonic() + self.purge_every
             self._scan()  # after the observer starts, so a file that lands during the scan is not missed
             self.log(f"watching {self.inbox}, writing to {self.outbox} (Ctrl+C stops)")
             while not stop.is_set():
+                if time.monotonic() >= next_purge:  # on this thread, so a purge never races a publish
+                    self._purge()
+                    next_purge = time.monotonic() + self.purge_every
                 self.step(convert)
                 time.sleep(self.poll)  # unlike Event.wait, Ctrl+C interrupts it on Windows
         finally:
@@ -166,6 +188,38 @@ class Watcher:
             if observer.is_alive():
                 observer.join()
             self._remove_temp()
+
+    def _purge(self) -> None:
+        """Delete the copies whose retention has passed; never stops the watcher."""
+        try:
+            result = self.copies.purge(self.inbox)
+        except Exception as e:  # noqa: BLE001 - e.g. the audit file cannot be written; the next purge tries again
+            self.log(f"the purge of expired copies failed ({type(e).__name__})")
+            return
+        if result.purged:
+            n = result.purged
+            self.log(f"deleted {n} redacted cop{'y' if n == 1 else 'ies'} older than {self.copies.retention_days} days")
+        if result.problem:
+            self.log(result.problem)
+
+    def _record(self, published: list[tuple[Path, os.stat_result]]) -> None:
+        """Record outputs just renamed into the outbox, each with the lstat of what was
+        written. One that differs by the time it is checked in place was changed by someone
+        else in between, so it is not Redactit's copy and is never recorded."""
+        ours = []
+        for path, written in published:
+            try:
+                st = os.lstat(path)
+            except OSError:
+                continue
+            if _fingerprint(st) == _fingerprint(written):
+                ours.append((path, st))
+        try:
+            self.copies.record(ours)
+        except Exception as e:  # noqa: BLE001 - the outputs are in place; only their expiry is lost
+            n = len(ours)
+            self.log(f"could not record {n} redacted cop{'y' if n == 1 else 'ies'} for deletion "
+                     f"({type(e).__name__}); {'it stays' if n == 1 else 'they stay'} until removed by hand")
 
     def _refuse_same_folder(self) -> None:
         """Refuse an outbox that is the inbox under any spelling.
@@ -343,9 +397,10 @@ class Watcher:
         """Write every output to the private folder, then rename each into the outbox.
 
         Nothing reaches the outbox until every output of the file is fully written, and a
-        rename within one volume is atomic, so a reader never sees a partial output.
+        rename within one volume is atomic, so a reader never sees a partial output. Every
+        output that reaches the outbox is recorded, even if a later one fails.
         """
-        staged = []
+        staged, published = [], []
         try:
             for name, content in outputs:
                 tmp = self.temp / f"{uuid.uuid4().hex}.part"
@@ -357,10 +412,14 @@ class Watcher:
                     f.flush()
                     os.fsync(f.fileno())  # the rename must not land before the data does
             for tmp, dst in staged:
+                written = os.lstat(tmp)  # closed, so final; a rename keeps the file ID, size and mtime
                 os.replace(tmp, dst)
+                published.append((dst, written))
         finally:
             for tmp, _ in staged:
                 tmp.unlink(missing_ok=True)  # already gone once renamed; this catches every failure
+            if published:
+                self._record(published)
 
 
 class _Events(FileSystemEventHandler):

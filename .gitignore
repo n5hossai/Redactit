@@ -20,3 +20,6 @@ models/
 .DS_Store
 Thumbs.db
 .models/
+
+# Signing keys: the extension's development key pair stays off the repo (only its public half is in manifest.json)
+*.pem

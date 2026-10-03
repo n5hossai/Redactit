@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Stand-in chat (claude.ai layout)</title>
+  <script src="/__standin/recorder.js"></script>
+</head>
+<body>
+  <!-- Matches the claude.ai adapter's first composer selector. -->
+  <fieldset>
+    <div class="ProseMirror" contenteditable="true" data-role="rich" data-handles-paste="yes"
+         style="min-height: 60px; border: 1px solid #888"></div>
+    <input type="file" id="upload" multiple>
+  </fieldset>
+  <textarea id="plain" rows="4" cols="60"></textarea>
+  <div id="dropzone" style="width: 400px; height: 120px; border: 2px dashed #888">Drop files here</div>
+</body>
+</html>

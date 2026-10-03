@@ -39,7 +39,7 @@ custom_terms:
 allowlist: []        # never redacted, e.g. your own company name. Admin file only.
 
 vault:
-  retention_days: 30
+  retention_days: 30   # also how long the folder watcher keeps its redacted copies
 
 sites:
   chatgpt.com: {dial: 4}   # per-site dial; can raise, never lower, the effective dial

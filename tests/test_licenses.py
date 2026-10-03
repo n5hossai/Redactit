@@ -28,6 +28,9 @@ FLAGGED = {
     "certifi": "MPL-2.0: CA bundle pulled in by requests/httpx; the offline engine never uses it",
     "setuptools": "MIT, vendoring autocommand (LGPL-3) and validate-pyproject files (MPL-2.0); spaCy needs it",
     "typing-extensions": "PSF-2.0: permissive; required by most typed libraries",
+    # Test-only (the e2e group). Its bundled Node.js LICENSE mentions GPL only in ICU's
+    # section: build-script macros (pkg.m4, config.guess) under the Autoconf exception.
+    "playwright": "Apache-2.0; the bundled Node.js notices mention GPL only in ICU's build-script text",
 }
 
 ALLOWED = re.compile(r"\b(MIT|Apache|BSD|ISC)\b", re.I)

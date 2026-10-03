@@ -6,9 +6,10 @@ a 4-byte native-endian length, then that many bytes of UTF-8 JSON. stdout carrie
 protocol frames and nothing else.
 
 Extension to host                                           Host to extension
-  ping        {id}                                            status    {id|null, state, version, protocol}
-  redact_text {id, scope, site, size, total} + chunks         progress  {id, stage[, page, pages]}
-  redact_file {id, scope, site, kind, size, total} + chunks   result    {id, size, total, parts} + chunks
+  ping        {id}                                            status    {id|null, state, version, protocol,
+  redact_text {id, scope, site, size, total} + chunks                    review_mode}
+  redact_file {id, scope, site, kind, size, total} + chunks   progress  {id, stage[, page, pages]}
+  remap       {id, scope, site, size, total} + chunks         result    {id, size, total, parts, review} + chunks
   chunk       {id, seq, total, data}                          error     {id|null, code, message}
   cancel      {id}
 
@@ -21,6 +22,13 @@ Markdown, say) are concatenated, chunked the same way, and split again by their 
 `state` goes warming -> ready-text -> ready-all (or unavailable if the engine cannot
 load). Requests are answered in arrival order; one that arrives while warming waits. An
 error's message is fixed text or a RedactitError's, so it never quotes the input.
+
+Protocol 2 adds review and re-mapping. `review_mode` is the loaded policy's review mode,
+"always" or "low_confidence" (null until the engine has loaded). A result's `review` is
+{needed, count}: how many of the engine's decisions for that input need review, counts
+only. `remap` sends text from the AI back with this scope's pseudonyms replaced by the
+real values in the vault; its result is one text part. That text holds real values, so
+the extension must hand it only to its side panel, never to a site's page (THREAT_MODEL T6).
 
 An error's `code` is one of MESSAGES' keys and stays stable across versions. A request
 that fails is answered with exactly one error and no result. Among them: engine_unavailable
@@ -51,7 +59,7 @@ from pathlib import Path
 
 from redactit import __version__
 
-PROTOCOL = 1
+PROTOCOL = 2
 CHUNK = 512 * 1024  # base64 characters per chunk: a frame stays near 512 KiB, half Chrome's 1 MB cap to the extension
 RAW_CHUNK = CHUNK // 4 * 3  # the payload bytes those characters carry (384 KiB)
 MAX_FRAME = CHUNK + 4096  # one chunk and its envelope: the largest frame a well-formed extension sends
@@ -68,6 +76,8 @@ IDLE_SECONDS = 30 * 60
 
 KINDS = ("txt", "md", "docx", "pdf", "image")
 _NEEDS_IMAGES = {"pdf", "image"}  # these wait for OCR; text and Word documents do not
+# The policy's review modes as the extension sees them (policy.ReviewConfig.mode).
+REVIEW_MODES = {"always": "always", "low_confidence_only": "low_confidence"}
 
 MESSAGES = {
     "bad_frame": "the message length is impossible; the connection is closing",
@@ -109,6 +119,7 @@ SCHEMA = {
     "cancel": {"id": _text(_ID)},
     "redact_text": _REQUEST,
     "redact_file": {**_REQUEST, "kind": lambda v: isinstance(v, str) and v in KINDS},
+    "remap": _REQUEST,
     "chunk": {"id": _text(_ID), "seq": _count(0), "total": _count(1),
               "data": lambda v: isinstance(v, str) and len(v) <= CHUNK},
 }
@@ -166,7 +177,7 @@ class Job:
     """One request: its chunks while they arrive, then its place in the queue."""
 
     id: str
-    kind: str  # "text" for redact_text, else one of KINDS
+    kind: str  # "text" for redact_text, "remap" for remap, else one of KINDS
     scope: str
     site: str
     size: int
@@ -177,7 +188,8 @@ class Job:
 
     @classmethod
     def start(cls, msg: dict) -> "Job":
-        job = cls(msg["id"], msg.get("kind", "text"), msg["scope"], msg["site"], msg["size"], msg["total"])
+        kind = msg.get("kind", "remap" if msg.get("type") == "remap" else "text")
+        job = cls(msg["id"], kind, msg["scope"], msg["site"], msg["size"], msg["total"])
         if job.total != chunk_count(job.size):
             raise Reject("bad_sequence", rid=job.id)
         return job
@@ -261,7 +273,13 @@ class Host:
         self._last_active = time.monotonic()
 
     def _status(self, rid: str | None) -> None:
-        self._send({"type": "status", "id": rid, "state": self._state, "version": __version__, "protocol": PROTOCOL})
+        self._send({"type": "status", "id": rid, "state": self._state, "version": __version__, "protocol": PROTOCOL,
+                    "review_mode": self._review_mode()})
+
+    def _review_mode(self) -> str | None:
+        if self._engine is None:
+            return None  # the policy is loaded with the engine
+        return REVIEW_MODES.get(self._engine.policy.review.mode, "always")  # a mode we do not know reviews all
 
     def _progress(self, rid: str, stage: str, page: int | None = None, pages: int | None = None) -> None:
         msg = {"type": "progress", "id": rid, "stage": stage}
@@ -272,11 +290,12 @@ class Host:
     def _error(self, rej: Reject) -> None:
         self._send({"type": "error", "id": rej.rid, "code": rej.code, "message": rej.message})
 
-    def _result(self, rid: str, parts: list[tuple[str, str, bytes]]) -> None:
+    def _result(self, rid: str, parts: list[tuple[str, str, bytes]], review: int) -> None:
         blob = b"".join(data for *_, data in parts)
         total = chunk_count(len(blob))
         self._send({"type": "result", "id": rid, "size": len(blob), "total": total,
-                    "parts": [{"name": name, "media_type": media, "size": len(data)} for name, media, data in parts]})
+                    "parts": [{"name": name, "media_type": media, "size": len(data)} for name, media, data in parts],
+                    "review": {"needed": review > 0, "count": review}})
         for seq in range(total):
             data = base64.b64encode(blob[seq * RAW_CHUNK:(seq + 1) * RAW_CHUNK]).decode("ascii")
             self._send({"type": "chunk", "id": rid, "seq": seq, "total": total, "data": data})
@@ -441,19 +460,24 @@ class Host:
         if failure:
             return self._error(Reject(failure.code, failure.message, job.id))
         self._progress(job.id, "redacting")
+        counted = _ReviewCount(self._engine)
         try:
-            parts = self._redact(job)
+            if job.kind == "remap":
+                text = self._engine.remap(job.payload().decode("utf-8"), job.scope, site=job.site)
+                parts = [("text", "text/plain", text.encode("utf-8"))]
+            else:
+                parts = self._redact(job, counted)
             if job.cancelled:
                 raise _Cancelled
         except _Cancelled:
             return self._error(Reject("cancelled", rid=job.id))
         except Exception as e:  # noqa: BLE001 - fail closed: an error frame, never the input
             return self._error(_request_failure(e, job.id))
-        self._result(job.id, parts)
+        self._result(job.id, parts, counted.review)
 
-    def _redact(self, job: Job) -> list[tuple[str, str, bytes]]:
+    def _redact(self, job: Job, engine: "_ReviewCount") -> list[tuple[str, str, bytes]]:
         """(part name, media type, bytes) for each output. Text parts are UTF-8."""
-        engine, data, where = self._engine, job.payload(), {"destination": job.site}
+        data, where = job.payload(), {"destination": job.site}
         if job.kind in ("text", "txt", "md", "docx"):
             if job.kind == "docx":
                 from redactit.formats.docx import docx_to_markdown
@@ -486,6 +510,23 @@ class Host:
                 busy = self._warming or self._uploads or self._queue or self._running is not None
             if not busy and time.monotonic() - self._last_active >= self._idle:
                 return self._stop(0)
+
+
+class _ReviewCount:
+    """The engine, for one request: counts the decisions that need review across every
+    `redact` call the formats make (a PDF makes one per page and image), and passes
+    everything else through. Counts only: the decisions themselves stay here."""
+
+    def __init__(self, engine) -> None:
+        self._engine, self.review = engine, 0
+
+    def __getattr__(self, name: str):
+        return getattr(self._engine, name)
+
+    def redact(self, *args, **kwargs):
+        result = self._engine.redact(*args, **kwargs)
+        self.review += sum(1 for d in result.decisions if d.needs_review)
+        return result
 
 
 def _load_failure(exc: Exception, stage: str) -> Reject:

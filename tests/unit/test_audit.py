@@ -86,6 +86,13 @@ def test_missing_field_raises(tmp_path):
             {"rule_id": "entities.person", "action": "pseudonymize", "approved": "Priya Okafor"},
         ),
         ("upload_blocked", {"destination": "outbox", "reason_code": "the host timed out for John Smith"}),
+        ("copies_purge", {"purged_count": 1, "dropped_count": 0, "kept_count": 0, "retention_days": 30,
+                          "index_readable": "Priya Okafor passport.png"}),
+        ("copies_purge", {"purged_count": "Priya Okafor passport.png", "dropped_count": 0, "kept_count": 0,
+                          "retention_days": 30, "index_readable": True}),
+        ("remap", {"site": "claude.ai", "label_count": 1, "restored_count": 1,
+                   "entity_counts": {"Priya Okafor": 1}}),
+        ("remap", {"site": "Priya Okafor", "label_count": 1, "restored_count": 1, "entity_counts": {}}),
     ],
 )
 def test_email_name_or_free_text_in_any_field_raises(tmp_path, event, fields):

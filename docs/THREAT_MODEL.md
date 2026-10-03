@@ -9,7 +9,8 @@ Update this file in the same PR as any change that moves a boundary.
 | Asset | Where it lives | Why it matters |
 |---|---|---|
 | Original content (text, files, clipboard) | User's machine (including the watcher's inbox), engine memory | The thing we exist to keep away from LLM providers |
-| Redacted copies | The watcher's outbox and its private staging folder; the clipboard after `redactit clip` | Pseudonymised, but file names and context stay; how long the outbox keeps them is undecided (PLAN §12) |
+| Redacted copies | The watcher's outbox and its private staging folder; the clipboard after `redactit clip` | Pseudonymised, but file names and context stay; the watcher deletes its outbox copies after the vault's retention period, 30 days by default (PLAN §2.1) |
+| Index of redacted copies | `copies.json` in the user data folder | Names each kept copy's path, and so its file name; decides what the retention purge may delete |
 | Pseudonym mappings (`[PERSON_1]` to real value) | Encrypted vault on disk | Reverses the redaction for anyone who reads it |
 | Vault key | OS keychain | Decrypts the vault |
 | Policy (managed + user) | `policy.yaml` files | Weakening it silently lets data through |
@@ -69,20 +70,21 @@ flowchart LR
 | T2 | Text survives in a PDF layer, metadata or embedded image | Engine | Pages rebuilt from images only; every page also goes through the image pipeline | Leak test: re-extract text layer, 300 DPI re-OCR, raw byte search |
 | T3 | EXIF/GPS or text chunks survive in an image | Engine | Re-encode from raw pixels | Leak test: metadata dump and byte search |
 | T4 | DOCX comments, tracked deletions, headers or `docProps` leak | Engine | All OOXML parts walked; `docProps` dropped from output | Leak test DOCX variants |
-| T5 | The site reads a paste before we redact it | B1 | Capture-phase listeners registered at `document_start`; event cancelled before the site sees it | Per-adapter interception test (Phase 5) |
-| T6 | Re-mapped real names are exposed to the site | B1 | Re-mapping only inside the side panel (an extension page); never written to the site DOM | Design rule, PLAN §6; review check in Phase 5 |
-| T7 | Upload proceeds while the engine is down | B1/B2 | Fail closed: disconnect, timeout or error blocks the upload | Extension test with the host stopped (Phase 5) |
+| T5 | The site reads a paste, drop or picked file before we redact it | B1 | Capture-phase listeners on `window`, registered at `document_start` in every frame; the trusted event is cancelled before any site listener runs; only redacted data goes back in (PLAN §7). The browser's file chooser never opens on one of the site's inputs: a click on `window`, the user's or a script's, and in the main-world guard a script's `click()`, `showPicker()` or dispatched click on a file input or its label, opens Redactit's own chooser, whose input is in no document, and only the redacted files go into the site's input, wherever it is (no document, an open or closed shadow root) and whatever the site does to it meanwhile. A drop is left to the site only when it carries exactly what a drag begun in the page carried, and never files | `tests/e2e/test_round_trip.py`: a real Ctrl+V paste, a desktop file drop (DevTools drag events) and a file pick reach the page's own window-capture listeners only as redacted synthetic events, and no raw value is in any event, DOM mutation or markup the page holds, on the claude.ai layout and on a page whose adapter turned itself off. `tests/e2e/test_file_picks.py`: a file input in no document, in an open or a closed shadow root, opened by `click()`, `showPicker()`, a dispatched click, a label, or the user, some removed from the page while the chooser is open, gives the page only the redacted file, read by its listeners and a timer polling the input; the guard's replacements cannot be deleted or redefined. `tests/e2e/test_drags.py`: after an in-page drag whose `dragend` the page kept from Redactit, a desktop file drop and a text drop from outside are intercepted. Live sites: the owner's manual script (PLAN §11) |
+| T6 | Re-mapped real names are exposed to the site | B1 | Re-mapping only inside the side panel (an extension page); never written to the site DOM. `redactit/remap` and the review API answer extension pages only (`not_allowed` to anyone else), a job port cannot start a remap, and content scripts only ever receive redacted host output. The host's remap audit holds counts only. A label means one person in one chat: a new chat's temporary scope goes only to the chat ID the site gives it, never to a chat already in use, and that link is kept in `chrome.storage.local` (URL paths only) across browser restarts and updates; a copy redacted for one chat is not attached to another | `tests/e2e/test_guard.py`: from the content script's own world, remap, the review queue and a remap job are refused, while the panel's page is served; `tests/unit/test_extension.py`: these messages are handled only among the panel-only ones and no content script names them; `tests/test_host.py` and `tests/unit/test_pseudonym.py`: only the scope's own labels come back, audited as counts; `tests/e2e/test_scopes.py`: a new chat's scope does not go to an older chat the tab opens, and survives a browser restart; `tests/e2e/test_attach.py`: attach is refused once the tab shows another chat; review check of the side panel when it lands |
+| T7 | Upload proceeds while the engine is down | B1/B2 | Fail closed: a missing or exited host, 2 minutes of silence (10 for files), a request held past 30 s of warm-up, an engine error or a protocol violation blocks the paste or upload, with a notice that says why; a result is used only once every chunk is in and checked | `tests/e2e/test_fail_closed.py`: host not registered, killed mid-request, stuck warming past the (shortened) limit, engine unavailable, a frame outside the protocol, and a cancel: the paste and the upload are blocked and the page sees nothing |
 | T8 | Another extension or process drives the native host | B2 | `allowed_origins` with one fixed ID; host also checks the origin argument Chrome passes against the installed manifest | `tests/test_host.py`: a wrong origin and the unfilled template are refused before the engine loads; `tests/unit/test_native.py`: the manifest must allow exactly one well-formed ID. Registration itself: installer test (Phase 7) |
 | T9 | Oversized or malformed native messages crash the host or truncate data | B2 | Length-prefixed frames, 512 KiB chunks with checked sequence numbers and totals, strict JSON schema, caps per message, payload and in-flight requests | `tests/unit/test_native.py` (schema, reassembly); `tests/test_host.py` (bad length, bad JSON, oversized message, wrong sequence number, unknown type, caps; a multi-MB PDF and image byte-identical to the engine's output) |
 | T10 | Raw values end up in logs, exceptions or the audit file | B3 | Audit stores types, counts, rule IDs and scores only; logging filter; sanitised exception type; the native host's errors are fixed text and library output on its stderr is withheld | Leak test scans logs and audit file (Phase 2); `tests/test_host.py` checks the host's errors, stderr and audit file |
-| T11 | Temp files are left behind or readable by others | B3 | Memory by default; formats and the native host write no temp files. The folder watcher stages each output in a `mkdtemp` folder inside the outbox (0700; on Windows a protected owner-only ACL, Python 3.12.4 or later) and renames it into place. Each write deletes its temp file in `finally`, the folder is removed in `finally`, and SIGTERM and Ctrl+Break are turned into Ctrl+C so every stop path runs that cleanup | `tests/unit/test_watcher.py`: the folder is private (mode or `icacls`) and empty after every file, after a failed rename and after Ctrl+C in the middle of a write; `tests/test_watch.py`: none left after a round trip, or after `redactit watch` is stopped from the keyboard |
+| T11 | Temp files are left behind or readable by others | B3 | Memory by default; formats and the native host write no temp files. The folder watcher stages each output in a `mkdtemp` folder inside the outbox (0700; on Windows a protected owner-only ACL, Python 3.12.4 or later) and renames it into place. Each write deletes its temp file in `finally`, the folder is removed in `finally`, and SIGTERM and Ctrl+Break are turned into Ctrl+C so every stop path runs that cleanup. The index of redacted copies is written to a temp file beside it in the data folder (0600 on POSIX; on Windows the folder's ACL, user-only under the profile), renamed into place, and the temp file is deleted in `finally` | `tests/unit/test_watcher.py`: the folder is private (mode or `icacls`) and empty after every file, after a failed rename and after Ctrl+C in the middle of a write; `tests/test_watch.py`: none left after a round trip, or after `redactit watch` is stopped from the keyboard |
 | T12 | Vault read from disk | B3 | AES-256-GCM, key in OS keychain, 30-day purge | Vault unit tests (Phase 2) |
 | T13 | User weakens the policy | Engine | Managed layer, tighten-only merge, locked types | Policy merge tests (Phase 2) |
 | T14 | Engine phones home or downloads at runtime | B4 | Only `setup-models` has network code; `safety.block_network()` refuses IP sockets and DNS in the engine process; sockets disabled in tests | `tests/test_offline.py` |
 | T15 | Tampered or swapped model file | B4 | SHA-256 verified on every load, no hash cache, including RapidOCR's bundled files; on Windows the file is held against writes and deletes until loaded (the file, not the folders on its path: §5), elsewhere hashed again after loading; download only in setup | `tests/unit/test_models.py`: tampered GLiNER, YuNet and RapidOCR files refused; a write, rename or delete during the hold fails (Windows); a change during loading is caught by the second hash |
 | T16 | Clipboard captures a password-manager secret | Engine | Items marked concealed are skipped before their text is read (markers per OS in PLAN §2.1), and the engine is never loaded for them; on macOS and Linux, where the check and the read are separate calls, text is refused if the clipboard changed or became concealed in between; redaction only on a keypress, no monitoring | `tests/unit/test_clipboard.py`: Windows, macOS and Linux markers with the OS calls replaced, and a change between check and read; `tests/test_clip.py`: a concealed item on the real Windows clipboard is left unchanged (skipped where no clipboard can be opened) |
 | T17 | Copyleft dependency creeps in | Supply chain | License test fails on anything outside MIT/Apache/BSD unless flagged | `tests/test_licenses.py` |
-| T18 | Remote code in the extension | Supply chain | MV3 CSP, no `eval`, no remote scripts, no build step | Manifest review; CSP in `manifest.json` |
+| T18 | Remote code in the extension | Supply chain | Chrome's default MV3 CSP (the manifest does not override it), no `eval`, no remote scripts, no build step | `tests/unit/test_extension.py`: exact permissions, no CSP or externally-connectable keys, no `eval`, `new Function`, remote URL, fetch or logging in extension code |
+| T19 | The retention purge deletes a file Redactit did not write, or deletes through a link | B3 | Only files in Redactit's own index (`copies.json` in the data folder, never the outbox) are candidates. One is deleted only if it is older than the policy's `vault.retention_days` (30 by default), still has its recorded file ID, size and mtime, is a regular file and not a link or a reparse point naming another path (the watcher's link rule), and is not in the current inbox. Anything else is dropped from the index and left alone, so the user's own files in an `--outbox` folder and copies they edited or replaced are never deleted. The index is replaced by an atomic rename; one that cannot be read or does not parse exactly deletes nothing. The `copies_purge` audit event carries counts only | `tests/unit/test_copies.py`: an expired copy deleted and a newer one kept; the user's own file, an edited copy and a replaced copy kept; a symlink, and a stood-in reparse point with a matching fingerprint, kept with what they name; the inbox untouched; a corrupt, half-written or unreadable index and a failed save delete nothing; the audit event's fields. `tests/unit/test_watcher.py`: every output recorded; purges at start-up and while running; an earlier outbox watched as the inbox untouched; a 7-day policy deletes an 8-day-old copy through `redactit watch` |
 
 ## 5. Residual risks
 
@@ -99,15 +101,66 @@ flowchart LR
   clipboard history (Win+V), cloud clipboard sync and third-party clipboard managers keep
   the original copy.
 - **Watcher file names.** Outputs keep their input's name, and a name can itself be
-  sensitive. Log lines leave names out; the outbox cannot.
+  sensitive. Log lines and the audit file leave names out; the outbox cannot, and the
+  index of copies in the data folder holds each copy's path until the copy is deleted.
 - **Hard stop of the watcher.** A power cut or a forced kill skips `finally` and can leave
   the private staging folder in the outbox, holding at most one partial output. That
-  output is already redacted; original content is never written there.
+  output is already redacted; original content is never written there. A kill while the
+  index of copies is saved can leave a temp file beside it in the data folder; the index
+  itself is the old one or the new one, never part of either.
+- **Purge checks, then deletes.** The checks and the delete are separate calls, so a file
+  put in place of an expired copy in the instant between them would be deleted. Deleting
+  a link removes the link, never what it names. Only a process running as the user can
+  make such a swap (§3).
+- **Copies that are not deleted.** Retention runs only while the watcher runs, so copies
+  of a watcher never started again stay. A copy whose record was lost is kept for good:
+  the index could not be written when it was made, two watchers saved the index at once,
+  or the index was found corrupt and started again. Each fails towards keeping a copy,
+  never deleting a file; the user removes such copies by hand.
 - **Watcher restart on Windows.** At start-up, a file counts as done when its outputs are
   newer than its times. A file moved in from the same drive, or copied over an input of
   the same name, while the watcher was stopped can keep older times. It is then not
   redone, and the outbox keeps the earlier version's output. While the watcher runs, the
   file's new fingerprint catches the change.
+- **Paths into a page the extension does not see.** It intercepts pastes, drops and file
+  picks. A main-world guard (`content/guard.js`, run at `document_start` before the site's
+  scripts) makes the site's own `navigator.clipboard.read`/`readText` and
+  `showOpenFilePicker`/`showDirectoryPicker` reject with `NotAllowedError`, as if the user
+  had refused, so a site falls back to the intercepted paths, and it turns a script's
+  `click()`, `showPicker()` or dispatched click on a file input into Redactit's own chooser
+  (T5). The replacements are non-writable and non-configurable, so the page cannot
+  reassign, redefine or delete them (`tests/e2e/test_guard.py`,
+  `tests/e2e/test_file_picks.py`). The guard runs in every frame and popup on the three
+  sites: one with no document to load (an iframe without `src` or with `about:blank`,
+  `window.open('')`) has it, and intercept.js, in the very task that creates it, and a
+  worker has neither the clipboard nor file pickers. What a site set on bypassing it can
+  still do, all recorded in `tests/e2e/test_guard.py`:
+  - An iframe given `srcdoc`, a `blob:` URL or a same-origin URL, or a popup opened on
+    one, gets the content scripts only when that document starts. In the task that
+    creates it, its window, which the document then goes on to use, is one Redactit has
+    not reached: the site can take the browser's own `click()`, `dispatchEvent()` or
+    clipboard reads from it, and open the browser's chooser on its own file input (the
+    picked file then reaches it raw), or add a `paste` listener there that runs before
+    intercept.js's (it then reads a paste into that frame raw, though the paste itself is
+    still blocked or redacted). Closing this would mean reaching every such window from
+    the parent the moment it is created, which no extension API offers.
+  - A frame from another origin inside the site gets neither script.
+  - Two clicks on a file input in a closed shadow root are ones Redactit cannot place,
+    and they open the browser's chooser. One is a script click through a label around a
+    slot, in a root built from HTML rather than `attachShadow`, whose event never reaches
+    `window` (it is in no document, or dispatched without `composed`). The other is a
+    keyboard or assistive-technology activation that names neither the element under the
+    pointer nor the focused one. Redactit then still takes the files from the input's
+    `input` event on `window`, unless the input is in no document or the site removes it
+    while the chooser is open.
+  - The site can see that the guard's functions are not native, that a `click()` which
+    opens a chooser dispatches no click event, and that a user's click on a file input is
+    cancelled. A site script that assigns one of the locked functions in strict mode gets
+    a `TypeError`.
+  The guard steers and closes the ordinary routes; it is not a sandbox against a site
+  written to evade it. Typed text is not intercepted at all.
+- **Notice presence.** The in-page notice's text is in a closed shadow root, but the site
+  can see that a notice element appeared, and so that Redactit is installed and acted.
 - **Same-user malware** can read the keychain and originals. Out of scope.
 - **Leak-test span dump.** Precision needs digests of redacted values. Unsalted digests of
   low-entropy IDs (SIN, SSN) are reversible, so that dump is test-only, used on synthetic
